@@ -1,0 +1,8 @@
+node_modules/
+.playwright-mcp/
+.DS_Store
+Thumbs.db
+__pycache__/
+*.log
+.service-account*.json
+*.service-account.json

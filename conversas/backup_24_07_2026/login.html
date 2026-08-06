@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — Controle de Paletes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    :root {
+      --ink: #14171a;
+      --surface: #1b1f23;
+      --surface-raised: #22262b;
+      --border: #33393f;
+      --text: #edeef0;
+      --text-muted: #9ba3ab;
+      --text-faint: #6b7278;
+      --amber: #f2a900;
+      --amber-soft: rgba(242, 169, 0, 0.14);
+      --amber-ink: #3a2900;
+      --danger: #ff5c5c;
+      --danger-soft: rgba(255, 92, 92, 0.14);
+      --font-display: 'Oswald', sans-serif;
+      --font-body: 'Inter', sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--ink);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.2s ease;
+    }
+
+    .login-wrapper {
+      width: 100%;
+      max-width: 420px;
+      padding: 20px;
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .login-header .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .login-header .logo i {
+      color: var(--amber);
+      font-size: 32px;
+    }
+
+    .login-header .logo span {
+      font-family: var(--font-display);
+      font-size: 28px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .login-header p {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .login-card::before {
+      content: '';
+      position: absolute;
+      left: 0; right: 0; top: 0;
+      height: 3px;
+      background: repeating-linear-gradient(
+        135deg,
+        var(--amber) 0px,
+        var(--amber) 10px,
+        var(--ink) 10px,
+        var(--ink) 20px
+      );
+    }
+
+    .login-card h2 {
+      font-family: var(--font-display);
+      font-size: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .form-group {
+      margin-bottom: 18px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-faint);
+      margin-bottom: 6px;
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    .input-wrapper i {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-faint);
+      font-size: 14px;
+      transition: color 0.15s ease;
+    }
+
+    .form-group input {
+      width: 100%;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 12px 14px 12px 42px;
+      font-family: var(--font-body);
+      font-size: 14px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--amber);
+      box-shadow: 0 0 0 3px var(--amber-soft);
+    }
+
+    .form-group input:focus + i,
+    .input-wrapper:focus-within i {
+      color: var(--amber);
+    }
+
+    .form-group input::placeholder {
+      color: var(--text-faint);
+    }
+
+    .error-msg {
+      display: none;
+      color: var(--danger);
+      font-size: 12px;
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: var(--danger-soft);
+      border-radius: 6px;
+      border: 1px solid rgba(255, 92, 92, 0.3);
+    }
+
+    .error-msg.show {
+      display: block;
+    }
+
+    .login-btn {
+      width: 100%;
+      background: var(--amber);
+      color: var(--amber-ink);
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.08s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .login-btn:hover {
+      background: #ffb919;
+    }
+
+    .login-btn:active {
+      transform: translateY(1px);
+    }
+
+    .login-footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 12px;
+      color: var(--text-faint);
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-6px); }
+      40% { transform: translateX(6px); }
+      60% { transform: translateX(-4px); }
+      80% { transform: translateX(4px); }
+    }
+
+    .shake {
+      animation: shake 0.4s ease;
+    }
+
+    /* Default users info */
+    .users-info {
+      display: none;
+    }
+
+    .users-info strong {
+      color: var(--amber);
+      display: block;
+      margin-bottom: 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .users-info code {
+      font-family: var(--font-mono);
+      background: var(--surface);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="login-header">
+      <div class="logo">
+        <i class="fas fa-truck-loading"></i>
+        <span>Paletes</span>
+      </div>
+      <p>Controle de Agendamento e Estoque</p>
+    </div>
+
+    <div class="login-card">
+      <h2><i class="fas fa-sign-in-alt"></i> Entrar</h2>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="username">Usuário</label>
+          <div class="input-wrapper">
+            <input type="text" id="username" placeholder="Digite seu usuário" required autocomplete="off">
+            <i class="fas fa-user"></i>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="password">Senha</label>
+          <div class="input-wrapper">
+            <input type="password" id="password" placeholder="Digite sua senha" required>
+            <i class="fas fa-lock"></i>
+          </div>
+        </div>
+        <div class="error-msg" id="errorMsg">Usuário ou senha inválidos.</div>
+        <button type="submit" class="login-btn">
+          <i class="fas fa-arrow-right-to-bracket"></i>
+          Entrar
+        </button>
+      </form>
+
+      <div class="users-info">
+        <strong><i class="fas fa-info-circle"></i> Acesso</strong>
+        Faça login com suas credenciais.<br>
+        Contacte o administrador se esqueceu sua senha.
+      </div>
+    </div>
+
+    <div class="login-footer">
+      CD Nagumo — Sistema de Controle de Paletes
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      'use strict';
+
+      var USERS_KEY = 'paletes.users';
+      var SESSION_KEY = 'paletes.session';
+
+      // Check if already logged in
+      var session = localStorage.getItem(SESSION_KEY);
+      if (session) {
+        try {
+          var user = JSON.parse(session);
+          if (user && user.username) {
+            window.location.href = 'index.html';
+            return;
+          }
+        } catch(e) {}
+      }
+
+      // Default users
+      function getUsers() {
+        var raw = localStorage.getItem(USERS_KEY);
+        if (raw) {
+          try { return JSON.parse(raw); } catch(e) {}
+        }
+        var defaults = {
+          admin: { username: 'admin', password: 'admin123', role: 'Admin', nome: 'Administrador' },
+          operador: { username: 'operador', password: 'op123', role: 'Operador', nome: 'Operador' }
+        };
+        localStorage.setItem(USERS_KEY, JSON.stringify(defaults));
+        return defaults;
+      }
+
+      function showError(msg) {
+        var el = document.getElementById('errorMsg');
+        el.textContent = msg;
+        el.classList.add('show');
+        document.querySelector('.login-card').classList.add('shake');
+        setTimeout(function() {
+          document.querySelector('.login-card').classList.remove('shake');
+        }, 400);
+      }
+
+      function hideError() {
+        document.getElementById('errorMsg').classList.remove('show');
+      }
+
+      document.getElementById('loginForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        hideError();
+
+        var username = document.getElementById('username').value.trim().toLowerCase();
+        var password = document.getElementById('password').value;
+
+        if (!username || !password) {
+          showError('Preencha todos os campos.');
+          return;
+        }
+
+        var users = getUsers();
+        var user = users[username];
+
+        if (!user || user.password !== password) {
+          showError('Usuário ou senha inválidos.');
+          return;
+        }
+
+        // Save session
+        var sessionData = {
+          username: user.username,
+          role: user.role,
+          nome: user.nome,
+          loginTime: new Date().toISOString()
+        };
+        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionData));
+        window.location.href = 'index.html';
+      });
+    })();
+  </script>
+</body>
+</html>

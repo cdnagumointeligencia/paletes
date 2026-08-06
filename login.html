@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — Controle de Paletes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="style-login.css">
+</head>
+<body>
+  <button type="button" class="login-config-btn" id="loginConfigBtn" onclick="abrirModalConfig()" aria-label="Configurações">
+    <i class="fas fa-cog"></i>
+  </button>
+
+  <div class="login-wrapper">
+    <div class="login-header">
+      <div class="logo">
+        <i class="fas fa-truck-loading"></i>
+        <span>PALETES NAGUMO</span>
+      </div>
+      <p>Controle de Agendamento</p>
+    </div>
+
+    <div class="login-card">
+      <h2><i class="fas fa-sign-in-alt"></i> Entrar</h2>
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="username">Usuário</label>
+          <div class="input-wrapper">
+            <input type="text" id="username" placeholder="Digite seu usuário" required autocomplete="off">
+            <i class="fas fa-user"></i>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="password">Senha</label>
+          <div class="input-wrapper">
+            <input type="password" id="password" placeholder="Digite sua senha" required>
+            <i class="fas fa-lock"></i>
+          </div>
+        </div>
+        <div class="login-cd-select">
+          <label class="login-cd-label"><i class="fas fa-warehouse"></i> Selecione o CD</label>
+          <div class="login-cd-options">
+            <button type="button" class="login-cd-card" data-cd="CD1">
+              <span class="login-cd-num">CD 1</span>
+              <span class="login-cd-sub">Agendamentos CD 1</span>
+            </button>
+            <button type="button" class="login-cd-card" data-cd="CD2">
+              <span class="login-cd-num">CD 2</span>
+              <span class="login-cd-sub">Agendamentos CD 2</span>
+            </button>
+          </div>
+        </div>
+        <div class="error-msg" id="errorMsg">Usuário ou senha inválidos.</div>
+      </form>
+
+      <div class="users-info">
+        <strong><i class="fas fa-info-circle"></i> Acesso</strong>
+        Faça login com suas credenciais.<br>
+        Contacte o administrador se esqueceu sua senha.
+      </div>
+    </div>
+
+    <div class="login-footer">
+      CD Nagumo — Sistema de Controle de Paletes
+    </div>
+  </div>
+
+  <!-- Admin Auth Modal -->
+  <div class="modal-overlay" id="modalAdminAuth">
+    <div class="modal modal-small auth-modal" role="dialog" aria-modal="true" aria-labelledby="adminAuthTitle">
+      <div class="modal-header">
+        <h3 id="adminAuthTitle">Autenticação</h3>
+        <button class="modal-close" id="adminAuthClose" aria-label="Fechar">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Digite a senha do administrador para acessar as configurações.</p>
+        <div class="form-group">
+          <label for="adminAuthPassword">Senha do Administrador</label>
+          <input type="password" id="adminAuthPassword" placeholder="Senha do administrador" autocomplete="off">
+          <div class="senha-erro" id="adminAuthError" style="display:none;margin-top:10px;">Senha incorreta.</div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" id="adminAuthCancel">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="adminAuthSubmit">Acessar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config Modal -->
+  <div class="modal-overlay" id="modalConfig">
+    <div class="modal modal-config">
+      <div class="modal-header">
+        <h3>Configurações</h3>
+        <button class="modal-close" onclick="fecharOverlay('modalConfig')">&times;</button>
+      </div>
+      <div class="modal-body config-body">
+        <div class="config-tabs">
+          <button type="button" class="config-tab" data-tab="configPaneFornecedores">
+            <i class="fas fa-truck"></i> Fornecedores
+          </button>
+          <button type="button" class="config-tab" data-tab="configPaneUsuarios">
+            <i class="fas fa-users"></i> Usuários
+          </button>
+          <button type="button" class="config-tab" data-tab="configPaneBackup">
+            <i class="fas fa-database"></i> Backup
+          </button>
+        </div>
+
+        <!-- Fornecedores -->
+        <div class="config-pane" id="configPaneFornecedores">
+          <div class="settings-header">
+            <h3>Fornecedores</h3>
+            <button type="button" class="btn btn-primary" id="addSupplierConfigBtn">
+              <i class="fas fa-plus"></i> Adicionar
+            </button>
+          </div>
+          <div class="suppliers-list" id="supplierConfigList"></div>
+
+          <div class="config-form-area hidden" id="supplierConfigFormArea">
+            <form id="supplierConfigForm">
+              <input type="hidden" id="supplierConfigId">
+              <h4 id="supplierConfigFormTitle">Novo Fornecedor</h4>
+              <div class="form-row">
+                <div class="form-group full-width">
+                  <label for="supplierConfigName">Nome *</label>
+                  <input type="text" id="supplierConfigName" required minlength="2">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="supplierConfigPhone">Telefone</label>
+                  <input type="tel" id="supplierConfigPhone">
+                </div>
+                <div class="form-group">
+                  <label for="supplierConfigEmail">Email</label>
+                  <input type="email" id="supplierConfigEmail">
+                </div>
+              </div>
+              <div class="form-actions">
+                <button type="button" class="btn btn-secondary" id="cancelSupplierConfigBtn">Cancelar</button>
+                <button type="submit" class="btn btn-primary">Salvar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Usuários -->
+        <div class="config-pane" id="configPaneUsuarios">
+          <div class="settings-header">
+            <h3>Usuários</h3>
+          </div>
+
+          <div class="user-senha-area" id="userConfigSenhaArea">
+            <div class="backup-info-card">
+              <i class="fas fa-lock"></i>
+              <div>
+                <strong>Acesso restrito ao Admin</strong>
+                <p>Informe a senha do administrador para gerenciar os usuários do sistema.</p>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="userConfigSenhaInput">Senha do Administrador</label>
+              <input type="password" id="userConfigSenhaInput" placeholder="Digite a senha do admin" autocomplete="off">
+            </div>
+            <div class="senha-erro" id="userConfigSenhaErro" style="display:none;">Senha incorreta.</div>
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary" id="userConfigSenhaBtn">
+                <i class="fas fa-unlock"></i> Acessar
+              </button>
+            </div>
+          </div>
+
+          <div class="user-gestao-area" id="userConfigGestaoArea" style="display:none;">
+            <div class="settings-header">
+              <button type="button" class="btn btn-primary" id="addUserConfigBtn">
+                <i class="fas fa-plus"></i> Novo Usuário
+              </button>
+            </div>
+            <div class="users-list" id="userConfigList"></div>
+
+            <div class="config-form-area hidden" id="userConfigFormArea">
+              <form id="userConfigForm">
+                <input type="hidden" id="userConfigUserId">
+                <h4 id="userConfigFormTitle">Novo Usuário</h4>
+                <div class="form-row">
+                  <div class="form-group full-width">
+                    <label for="userConfigUserLogin">Usuário *</label>
+                    <input type="text" id="userConfigUserLogin" required minlength="3" autocomplete="off">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="userConfigUserPassword">Senha *</label>
+                    <input type="password" id="userConfigUserPassword" minlength="4">
+                    <small id="userConfigPasswordHint" style="display:none;">Deixe em branco para manter a senha atual.</small>
+                  </div>
+                  <div class="form-group">
+                    <label for="userConfigUserRole">Perfil *</label>
+                    <select id="userConfigUserRole" required>
+                      <option value="Operador">Operador</option>
+                      <option value="Admin">Admin</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button type="button" class="btn btn-secondary" id="cancelUserConfigBtn">Cancelar</button>
+                  <button type="button" class="btn btn-danger" id="userConfigDeleteUser" style="display:none;">
+                    <i class="fas fa-trash"></i> Excluir
+                  </button>
+                  <button type="submit" class="btn btn-primary">Salvar</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Backup -->
+        <div class="config-pane" id="configPaneBackup">
+          <div class="settings-header">
+            <h3>Backup do Sistema</h3>
+          </div>
+
+          <div class="user-senha-area" id="backupConfigSenhaArea">
+            <div class="backup-info-card">
+              <i class="fas fa-lock"></i>
+              <div>
+                <strong>Acesso restrito ao Admin</strong>
+                <p>Informe a senha do administrador para acessar o backup do sistema.</p>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="backupConfigSenhaInput">Senha do Administrador</label>
+              <input type="password" id="backupConfigSenhaInput" placeholder="Digite a senha do admin" autocomplete="off">
+            </div>
+            <div class="senha-erro" id="backupConfigSenhaErro" style="display:none;">Senha incorreta.</div>
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary" id="backupConfigSenhaBtn">
+                <i class="fas fa-unlock"></i> Acessar
+              </button>
+            </div>
+          </div>
+
+          <div class="user-gestao-area" id="backupConfigGestaoArea" style="display:none;">
+            <div class="backup-info-card">
+              <i class="fas fa-info-circle"></i>
+              <div>
+                <strong>O que é incluído no backup?</strong>
+                <p>Agendamentos, fornecedores, histórico e configurações de usuários. A sessão de login NÃO é incluída.</p>
+              </div>
+            </div>
+            <div class="backup-actions-grid">
+              <div class="backup-action-card">
+                <div class="backup-action-icon export"><i class="fas fa-file-export"></i></div>
+                <h4>Exportar Backup</h4>
+                <p>Baixe um arquivo JSON com todos os dados do sistema.</p>
+                <button type="button" class="btn btn-primary" id="backupConfigExportBtn">
+                  <i class="fas fa-download"></i> Exportar Agora
+                </button>
+              </div>
+              <div class="backup-action-card">
+                <div class="backup-action-icon import"><i class="fas fa-file-import"></i></div>
+                <h4>Importar Backup</h4>
+                <p>Restaure os dados a partir de um arquivo de backup anterior.</p>
+                <button type="button" class="btn btn-secondary" id="backupConfigImportBtn">
+                  <i class="fas fa-upload"></i> Importar Arquivo
+                </button>
+                <input type="file" id="backupConfigFileInput" style="display:none" accept=".json">
+              </div>
+            </div>
+            <div class="backup-current" id="backupConfigCurrentInfo"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backup Confirm Modal -->
+  <div class="modal-overlay" id="backupConfigConfirm">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Confirmar Importação</h3>
+        <button class="modal-close" id="backupConfigCloseConfirm">&times;</button>
+      </div>
+      <div class="modal-body" id="backupConfigConfirmBody"></div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" id="backupConfigCancelImport">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="backupConfigConfirmImport">Importar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script type="module" src="firebase-init.js"></script>
+  <script src="login.js"></script>
+
+  <script src="config.js"></script>
+</body>
+</html>

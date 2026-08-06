@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Uso interno: qualquer usuário autenticado (incl. anônimo) pode ler/escrever.
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Contador sequencial compartilhado das senhas SAC (transação fbProximaSenhaSac).
+    // Regra explícita para garantir acesso mesmo se o catch-all acima for restringido.
+    match /contadores/{doc} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

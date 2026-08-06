@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Controle de Retirada de Paletes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    (function () {
+      // Check login session
+      var SESSION_KEY = 'paletes.session';
+      var session = localStorage.getItem(SESSION_KEY);
+      if (!session) {
+        window.location.href = 'login.html';
+        return;
+      }
+      try {
+        var user = JSON.parse(session);
+        if (!user || !user.username) {
+          window.location.href = 'login.html';
+          return;
+        }
+        window.__currentUser = user;
+      } catch(e) {
+        window.location.href = 'login.html';
+        return;
+      }
+
+      var saved = localStorage.getItem('paletes.theme');
+      var theme = saved === 'light' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <i class="fas fa-truck-loading"></i>
+        <span>Paletes</span>
+      </div>
+      <button class="sidebar-toggle" id="sidebarToggle" aria-label="Recolher menu">
+        <i class="fas fa-bars"></i>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-view="calendar">
+        <i class="fas fa-calendar-alt"></i>
+        <span>Calendário</span>
+      </a>
+      <a href="#" class="nav-item" data-view="list">
+        <i class="fas fa-list"></i>
+        <span>Lista</span>
+      </a>
+      <a href="#" class="nav-item" data-view="suppliers">
+        <i class="fas fa-truck"></i>
+        <span>Fornecedores</span>
+      </a>
+      <a href="#" class="nav-item" data-view="reports">
+        <i class="fas fa-chart-bar"></i>
+        <span>Relatórios</span>
+      </a>
+      <a href="gerenciamento.html" class="nav-item">
+        <i class="fas fa-warehouse"></i>
+        <span>Gerenciamento</span>
+      </a>
+      <a href="#" class="nav-item" data-view="settings" id="navSettings" style="display:none;">
+        <i class="fas fa-cog"></i>
+        <span>Configurações</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <i class="fas fa-user-circle"></i>
+        <span id="sidebarUserName">Operador</span>
+        <span id="sidebarUserRole" style="font-size:10px;color:var(--text-faint);margin-left:auto;"></span>
+      </div>
+      <button class="btn btn-secondary" id="logoutBtn" style="width:100%;margin-top:10px;justify-content:center;font-size:12px;">
+        <i class="fas fa-sign-out-alt"></i>
+        <span>Sair</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Abrir menu">
+          <i class="fas fa-bars"></i>
+        </button>
+        <h1 class="page-title">Agendamento de Retirada</h1>
+      </div>
+      <div class="header-center">
+        <button class="btn btn-icon" id="prevDay" aria-label="Dia anterior">
+          <i class="fas fa-chevron-left"></i>
+        </button>
+        <h2 class="current-date" id="currentDate"></h2>
+        <button class="btn btn-icon" id="nextDay" aria-label="Próximo dia">
+          <i class="fas fa-chevron-right"></i>
+        </button>
+        <button class="btn btn-secondary" id="todayBtn">Hoje</button>
+      </div>
+      <div class="header-right">
+        <div class="search-box">
+          <i class="fas fa-search"></i>
+          <input type="text" id="searchInput" placeholder="Buscar agendamentos...">
+        </div>
+        <button class="btn btn-primary" id="newScheduleBtn">
+          <i class="fas fa-plus"></i>
+          <span>Novo Agendamento</span>
+        </button>
+        <a href="gerenciamento.html" class="btn btn-secondary">
+          <i class="fas fa-warehouse"></i>
+          <span>Estoque</span>
+        </a>
+        <button class="btn btn-icon" id="themeToggle" aria-label="Alternar modo claro/escuro">
+          <i class="fas fa-moon"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Stats Bar -->
+    <div class="stats-bar">
+      <div class="stat-card">
+        <div class="stat-icon livre"><i class="fas fa-check-circle"></i></div>
+        <div class="stat-info">
+          <span class="stat-value" id="statLivre">0</span>
+          <span class="stat-label">Livres</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon agendado"><i class="fas fa-clock"></i></div>
+        <div class="stat-info">
+          <span class="stat-value" id="statAgendado">0</span>
+          <span class="stat-label">Agendados</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon confirmado"><i class="fas fa-check-double"></i></div>
+        <div class="stat-info">
+          <span class="stat-value" id="statConfirmado">0</span>
+          <span class="stat-label">Confirmados</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon cancelado"><i class="fas fa-times-circle"></i></div>
+        <div class="stat-info">
+          <span class="stat-value" id="statCancelado">0</span>
+          <span class="stat-label">Cancelados</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon total"><i class="fas fa-boxes"></i></div>
+        <div class="stat-info">
+          <span class="stat-value" id="statPaletes">0</span>
+          <span class="stat-label">Total Paletes</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Calendar View -->
+    <div class="view-container" id="calendarView">
+      <div class="calendar-grid">
+        <div class="time-column">
+          <div class="time-header"></div>
+          <div class="time-slots" id="timeSlots"></div>
+        </div>
+        <div class="day-column">
+          <div class="day-header">
+            <span class="day-name" id="dayName"></span>
+            <span class="day-number" id="dayNumber"></span>
+          </div>
+          <div class="day-slots" id="daySlots"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- List View -->
+    <div class="view-container hidden" id="listView">
+      <div class="list-header">
+        <div class="filter-group">
+          <label>Filtrar por status:</label>
+          <select id="statusFilter">
+            <option value="all">Todos</option>
+            <option value="Livre">Livre</option>
+            <option value="Agendado">Agendado</option>
+            <option value="Confirmado">Confirmado</option>
+            <option value="Cancelado">Cancelado</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary" id="exportBtn">
+          <i class="fas fa-file-export"></i>
+          Exportar CSV
+        </button>
+      </div>
+      <div class="list-container">
+        <table class="schedule-table">
+          <thead>
+            <tr>
+              <th>Horário</th>
+              <th>Fornecedor</th>
+              <th>Paletes</th>
+              <th>CD</th>
+              <th>Motorista</th>
+              <th>Placa</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="scheduleListBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Suppliers View -->
+    <div class="view-container hidden" id="suppliersView">
+      <div class="suppliers-header">
+        <h3>Gerenciar Fornecedores</h3>
+        <button class="btn btn-primary" id="addSupplierBtn">
+          <i class="fas fa-plus"></i>
+          Adicionar Fornecedor
+        </button>
+      </div>
+      <div class="suppliers-list" id="suppliersList"></div>
+    </div>
+
+    <!-- Reports View -->
+    <div class="view-container hidden" id="reportsView">
+      <div class="reports-container">
+        <h3>Relatórios</h3>
+        <div class="report-cards">
+          <div class="report-card">
+            <i class="fas fa-calendar-day"></i>
+            <h4>Relatório Diário</h4>
+            <p>Agendamentos do dia atual</p>
+            <button class="btn btn-secondary" id="dailyReportBtn">Gerar</button>
+          </div>
+          <div class="report-card">
+            <i class="fas fa-calendar-week"></i>
+            <h4>Relatório Mensal</h4>
+            <p>Resumo do mês</p>
+            <button class="btn btn-secondary" id="monthlyReportBtn">Gerar</button>
+          </div>
+          <div class="report-card">
+            <i class="fas fa-truck"></i>
+            <h4>Por Fornecedor</h4>
+            <p>Histórico por fornecedor</p>
+            <button class="btn btn-secondary" id="supplierReportBtn">Gerar</button>
+          </div>
+        </div>
+        <div class="report-output hidden" id="reportOutput"></div>
+      </div>
+    </div>
+
+    <!-- Settings View -->
+    <div class="view-container hidden" id="settingsView">
+      <div class="settings-container">
+        <div class="settings-header">
+          <h3>Configurações</h3>
+          <button class="btn btn-primary" id="addUserBtn">
+            <i class="fas fa-plus"></i>
+            Novo Usuário
+          </button>
+        </div>
+        <div class="users-list" id="usersList"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Schedule Modal -->
+  <div class="modal-overlay" id="scheduleModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">Novo Agendamento</h3>
+        <button class="modal-close" id="closeModal">&times;</button>
+      </div>
+      <form id="scheduleForm">
+        <input type="hidden" id="scheduleId">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="scheduleDate">Data</label>
+            <input type="date" id="scheduleDate" required>
+          </div>
+          <div class="form-group">
+            <label for="scheduleTime">Horário</label>
+            <select id="scheduleTime" required>
+              <option value="09:00">09:00</option>
+              <option value="10:00">10:00</option>
+              <option value="11:00">11:00</option>
+              <option value="13:00">13:00</option>
+              <option value="14:00">14:00</option>
+              <option value="15:00">15:00</option>
+              <option value="16:00">16:00</option>
+              <option value="17:00">17:00</option>
+              <option value="18:00">18:00</option>
+              <option value="19:00">19:00</option>
+              <option value="20:00">20:00</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="scheduleCD">Centro de Distribuição *</label>
+            <select id="scheduleCD" required>
+              <option value="cd1">CD 1</option>
+              <option value="cd2">CD 2</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="supplier">Fornecedor *</label>
+            <input type="text" id="supplier" placeholder="Nome do fornecedor" required minlength="2" autocomplete="off">
+            <div class="supplier-suggestions" id="supplierSuggestions"></div>
+          </div>
+          <div class="form-group">
+            <label for="pallets">Qtde Paletes *</label>
+            <input type="number" id="pallets" min="1" max="9999" placeholder="0" required>
+            <small>Máximo: 1000 por slot</small>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="driver">Motorista *</label>
+            <input type="text" id="driver" placeholder="Nome do motorista" required minlength="2">
+          </div>
+          <div class="form-group">
+            <label for="plate">Placa *</label>
+            <input type="text" id="plate" placeholder="ABC-1234" required pattern="[A-Za-z]{3}-?[0-9A-Za-z]{4}" maxlength="8">
+            <small>Formato: ABC-1234 ou ABC1234</small>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group full-width">
+            <label for="status">Status</label>
+            <select id="status">
+              <option value="Agendado">Agendado</option>
+              <option value="Confirmado">Confirmado</option>
+              <option value="Cancelado">Cancelado</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group full-width">
+            <label for="notes">Observações</label>
+            <textarea id="notes" rows="3" placeholder="Observações opcionais..."></textarea>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="cancelBtn">Cancelar</button>
+          <button type="button" class="btn btn-danger" id="deleteBtn" style="display:none;">
+            <i class="fas fa-trash"></i> Excluir
+          </button>
+          <button type="submit" class="btn btn-primary" id="saveBtn">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Confirmation Modal -->
+  <div class="modal-overlay" id="confirmModal">
+    <div class="modal modal-small">
+      <div class="modal-header">
+        <h3>Confirmar Exclusão</h3>
+        <button class="modal-close" id="closeConfirmModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Tem certeza que deseja excluir este agendamento?</p>
+        <p class="confirm-details" id="confirmDetails"></p>
+        <p class="confirm-warning">O horário será liberado automaticamente.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="cancelConfirmBtn">Cancelar</button>
+        <button class="btn btn-danger" id="confirmDeleteBtn">Excluir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supplier Modal -->
+  <div class="modal-overlay" id="supplierModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="supplierModalTitle">Novo Fornecedor</h3>
+        <button class="modal-close" id="closeSupplierModal">&times;</button>
+      </div>
+      <form id="supplierForm">
+        <input type="hidden" id="supplierId">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="supplierName">Nome *</label>
+            <input type="text" id="supplierName" required minlength="2">
+          </div>
+          <div class="form-group">
+            <label for="supplierCategory">Tipo de Caminhão</label>
+            <select id="supplierCategory">
+              <option value="Truck">Truck</option>
+              <option value="Carreta">Carreta</option>
+              <option value="Carreta LS">Carreta LS</option>
+              <option value="Toco">Toco</option>
+              <option value="3/4">3/4</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="supplierPhone">Telefone</label>
+            <input type="tel" id="supplierPhone">
+          </div>
+          <div class="form-group">
+            <label for="supplierEmail">Email</label>
+            <input type="email" id="supplierEmail">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="cancelSupplierBtn">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- User Modal -->
+  <div class="modal-overlay" id="userModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="userModalTitle">Novo Usuário</h3>
+        <button class="modal-close" id="closeUserModal">&times;</button>
+      </div>
+      <form id="userForm">
+        <input type="hidden" id="userId">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="userLogin">Usuário *</label>
+            <input type="text" id="userLogin" required minlength="3" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="userNome">Nome Completo *</label>
+            <input type="text" id="userNome" required minlength="2">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="userPassword">Senha *</label>
+            <input type="password" id="userPassword" minlength="4">
+            <small id="passwordHint" style="display:none;">Deixe em branco para manter a senha atual.</small>
+          </div>
+          <div class="form-group">
+            <label for="userRole">Perfil *</label>
+            <select id="userRole" required>
+              <option value="Operador">Operador</option>
+              <option value="Admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="cancelUserBtn">Cancelar</button>
+          <button type="button" class="btn btn-danger" id="deleteUserBtn" style="display:none;">
+            <i class="fas fa-trash"></i> Excluir
+          </button>
+          <button type="submit" class="btn btn-primary">Salvar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
