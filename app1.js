@@ -191,7 +191,7 @@
 
     subscribeSchedules();
     subscribeSuppliers();
-    subscribeHistory();
+    // Histórico é assinado sob demanda ao abrir a visão (otimização de leituras).
     // PATCH 6: Sincronizar eventos pendentes a cada 30s
     setInterval(() => {
       syncPendingHistoryEvents().catch(err => console.error('Erro ao sincronizar history:', err));
@@ -393,6 +393,9 @@
       els.searchInput.value = '';
       state.searchQuery = '';
     }
+    // Histórico só é lido quando a visão é aberta (reduz leituras no load).
+    if (view === 'history' && !unsubHistory) subscribeHistory();
+    else if (view !== 'history' && unsubHistory) { unsubHistory(); unsubHistory = null; }
     render();
     if (window.innerWidth <= 900) els.sidebar.classList.remove('mobile-open');
   }
