@@ -163,6 +163,8 @@
   async function restoreSessionAndInit(FB) {
     let session = null;
     try {
+      // Aguarda o login anônimo definir window.__fbUser (mesma ordem do login.js)
+      await FB.whenReady();
       session = await FB.restoreSession();
     } catch (e) {
       console.warn('Erro ao restaurar sessão:', e);
