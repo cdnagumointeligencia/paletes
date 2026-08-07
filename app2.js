@@ -366,6 +366,7 @@
     nextDay: $('#nextDay'),
     todayBtn: $('#todayBtn'),
     searchInput: $('#searchInput'),
+    searchBox: $('#searchBox'),
     newScheduleBtn: $('#newScheduleBtn'),
 
     statLivre: $('#statLivre'),
@@ -479,6 +480,12 @@
     state.currentView = view;
     Object.entries(els.views).forEach(([key, el]) => el.classList.toggle('hidden', key !== view));
     els.navItems.forEach((item) => item.classList.toggle('active', item.dataset.view === view));
+    // Busca de agendamentos só faz sentido na visão Lista.
+    els.searchBox.classList.toggle('hidden', view !== 'list');
+    if (view !== 'list') {
+      els.searchInput.value = '';
+      state.searchQuery = '';
+    }
     render();
     if (window.innerWidth <= 900) els.sidebar.classList.remove('mobile-open');
   }
