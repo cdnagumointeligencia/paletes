@@ -264,6 +264,10 @@
     const [y, m, d] = s.split('-').map(Number);
     return new Date(y, m - 1, d);
   }
+  function isPastSlot(dateStr, timeStr) {
+    const slot = new Date(`${dateStr}T${timeStr}:00`);
+    return slot < new Date();
+  }
 
   // ---------- DOM refs ----------
   const $ = (sel) => document.querySelector(sel);
@@ -677,6 +681,12 @@
         els.scheduleTime.disabled = true;
         els.saveBtn.style.display = 'none';
         els.deleteBtn.style.display = 'none';
+      } else if (isPastSlot(s.date, s.time)) {
+        // Data/horário já passou: apenas o status (Confirmado/Cancelado) pode mudar.
+        setFieldsLocked(true, { keepStatus: true });
+        els.scheduleDate.disabled = true;
+        els.scheduleTime.disabled = true;
+        els.deleteBtn.style.display = 'none';
       }
     } else {
       els.modalTitle.textContent = 'Novo Agendamento';
@@ -691,8 +701,10 @@
     setTimeout(() => els.supplierInput.focus(), 50);
   }
 
-  function setFieldsLocked(locked) {
-    const fields = [els.pallets, els.scheduleTipoPalete, els.supplierInput, els.driver, els.plate, els.status, els.notes];
+  function setFieldsLocked(locked, opts) {
+    const keepStatus = opts && opts.keepStatus;
+    const fields = [els.pallets, els.scheduleTipoPalete, els.supplierInput, els.driver, els.plate, els.notes];
+    if (!keepStatus) fields.push(els.status);
     fields.forEach((f) => { if (f) f.disabled = locked; });
     const formGroups = document.querySelectorAll('#scheduleForm .form-group label');
     const LOCK_HTML = ' <span class="locked-badge"><i class="fas fa-lock"></i></span>';
@@ -702,7 +714,9 @@
     });
     if (locked) {
       formGroups.forEach((lbl) => {
-        lbl.innerHTML += LOCK_HTML;
+        const group = lbl.closest('.form-group');
+        const input = group ? group.querySelector('input, select, textarea') : null;
+        if (input && input.disabled) lbl.innerHTML += LOCK_HTML;
       });
     }
   }
@@ -711,6 +725,8 @@
     const editing = state.editingScheduleId ? state.schedules.find((sc) => sc.id === state.editingScheduleId) : null;
     if (editing && editing.status === 'Confirmado') {
       setFieldsLocked(true);
+    } else if (editing && isPastSlot(editing.date, editing.time)) {
+      setFieldsLocked(true, { keepStatus: true });
     } else {
       setFieldsLocked(false);
     }
@@ -767,6 +783,7 @@
       const statusChanged = wasConfirmed && els.status.value !== 'Confirmado';
       const fieldsLocked = wasConfirmed && !statusChanged;
       const willConfirm = els.status.value === 'Confirmado' && (!editing || !wasConfirmed);
+      const editingPast = editing ? isPastSlot(editing.date, editing.time) : false;
 
       if (willConfirm) {
         if (!confirm('Ao confirmar o agendamento, a edição será bloqueada. Esta ação não pode ser desfeita. Deseja continuar?')) {
@@ -775,7 +792,7 @@
       }
 
       const pallets = fieldsLocked ? editing.pallets : Number(els.pallets.value);
-      if (!fieldsLocked && pallets > 1000) {
+      if (!fieldsLocked && !editingPast && pallets > 1000) {
         toast('Máximo de 1000 paletes por slot.', 'error');
         return;
       }
@@ -793,6 +810,23 @@
         notes: els.notes.value.trim(),
         createdBy: currentUser ? currentUser.username : 'unknown',
       };
+
+      // REGRA: não permitir agendar para data/horário que já passou.
+      // Criação em slot passado é bloqueada; edição de agendamento passado
+      // só permite confirmar ou cancelar (campos já travados no modal).
+      const slotInPast = isPastSlot(payload.date, payload.time);
+      if (!editing && slotInPast) {
+        toast('Não é possível agendar para uma data/horário que já passou.', 'error');
+        return;
+      }
+      if (editing && !editingPast && slotInPast) {
+        toast('Não é possível mover o agendamento para uma data/horário que já passou.', 'error');
+        return;
+      }
+      if (editing && editingPast && payload.status === 'Agendado') {
+        toast('Agendamento passado: só é possível confirmar ou cancelar.', 'error');
+        return;
+      }
 
       // Fornecedor deve existir na lista cadastrada (configurações).
       // Edição de agendamento legado pode manter o fornecedor original mesmo
