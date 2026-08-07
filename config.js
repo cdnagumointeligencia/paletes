@@ -230,13 +230,20 @@
   }
 
   function subscribeSuppliers() {
-    if (window.FB && typeof window.FB.listenSuppliers === 'function') {
-      window.FB.listenSuppliers(function (docs) {
-        suppliersCache = docs || [];
-        suppliersLoaded = true;
-        if (supplierList) renderSuppliersList();
-      });
+    // firebase-init.js é módulo (deferido): pode ainda não ter definido window.FB
+    // quando este script roda. Espera até existir e então registra o listener.
+    function register() {
+      if (window.FB && typeof window.FB.listenSuppliers === 'function') {
+        window.FB.listenSuppliers(function (docs) {
+          suppliersCache = docs || [];
+          suppliersLoaded = true;
+          if (supplierList) renderSuppliersList();
+        });
+      } else {
+        setTimeout(register, 100);
+      }
     }
+    register();
   }
   subscribeSuppliers();
 

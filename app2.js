@@ -877,6 +877,16 @@
         createdBy: currentUser ? currentUser.username : 'unknown',
       };
 
+      // Fornecedor deve existir na lista cadastrada (configurações).
+      // Edição de agendamento legado pode manter o fornecedor original mesmo
+      // se ele tiver sido removido da lista.
+      const existingSched = els.scheduleId.value ? state.schedules.find((sc) => sc.id === els.scheduleId.value) : null;
+      const keepOriginal = existingSched && payload.supplier === existingSched.supplier;
+      if (!keepOriginal && !state.suppliers.some((s) => s.name.toLowerCase() === payload.supplier.toLowerCase())) {
+        toast('Fornecedor não cadastrado. Cadastre-o na página de Configurações.', 'error');
+        return;
+      }
+
       // Conflict check local (UX rápida). A validação definitiva é feita
       // pela TRANSAÇÃO no Firestore (createScheduleAtomic/updateSchedule), que
       // usa slotLocks — elimina a race condition de reserva dupla.
