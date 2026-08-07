@@ -66,7 +66,11 @@ onAuthStateChanged(auth, (user) => {
 async function ensureDefaultUsers() {
   try {
     const existing = await getDoc(doc(db, 'users', 'admin'));
-    if (!existing.exists()) {
+    const data = existing.exists() ? existing.data() : null;
+    // Repara o admin se não existir OU se estiver sem credenciais válidas
+    // (migração legada pode ter gravado o doc sem salt/passwordHash).
+    const needsRepair = !existing.exists() || !data || !data.salt || !data.passwordHash;
+    if (needsRepair) {
       const salt = Math.random().toString(36).slice(2, 10);
       const hash = await sha256(salt + ':Admin123');
       await setDoc(doc(db, 'users', 'admin'), {
@@ -74,9 +78,9 @@ async function ensureDefaultUsers() {
         role: 'Admin',
         salt,
         passwordHash: hash,
-        createdAt: serverTimestamp()
+        updatedAt: serverTimestamp()
       });
-      console.info('Usuário admin padrão criado no Firestore.');
+      console.info('Usuário admin padrão criado/reparado no Firestore.');
     }
   } catch (e) {
     console.warn('ensureDefaultUsers falhou:', e);
@@ -469,10 +473,20 @@ window.FB = {
   validateUser: async function (username, password) {
     const u = await this.getUser(username);
     if (!u) return null;
-    const salt = u.salt || '';
-    const hash = await sha256(salt + ':' + password);
-    if (hash !== u.passwordHash) return null;
-    return { username: u.username, role: u.role, salt, passwordHash: hash };
+    if (u.passwordHash) {
+      const salt = u.salt || '';
+      const hash = await sha256(salt + ':' + password);
+      if (hash !== u.passwordHash) return null;
+      return { username: u.username, role: u.role, salt, passwordHash: hash };
+    }
+    // Doc legado (pré-migração): senha em texto puro. Valida e faz upgrade para hash.
+    if (u.password && String(u.password) === String(password)) {
+      const salt = Math.random().toString(36).slice(2, 10);
+      const hash = await sha256(salt + ':' + password);
+      await setDoc(doc(db, 'users', username), { salt, passwordHash: hash, updatedAt: serverTimestamp() }, { merge: true });
+      return { username: u.username, role: u.role, salt, passwordHash: hash };
+    }
+    return null;
   },
 
   // ============================================================
