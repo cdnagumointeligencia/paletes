@@ -9,32 +9,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="style1.css">
-  <script>
-    (function () {
-      // Check login session
-      var SESSION_KEY = 'paletes.session';
-      var session = localStorage.getItem(SESSION_KEY);
-      if (!session) {
-        window.location.href = 'login.html';
-        return;
-      }
-      try {
-        var user = JSON.parse(session);
-        if (!user || !user.username) {
-          window.location.href = 'login.html';
-          return;
-        }
-        window.__currentUser = user;
-      } catch(e) {
-        window.location.href = 'login.html';
-        return;
-      }
-
-      var saved = localStorage.getItem('paletes.theme.cd1');
-      var theme = saved === 'light' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', theme);
-    })();
-  </script>
 </head>
 <body>
   <!-- Sidebar -->

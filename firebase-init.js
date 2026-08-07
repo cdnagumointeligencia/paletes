@@ -6,11 +6,12 @@
 //  - Exclusão remove schedule + lock de forma atômica.
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
+import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
 import {
   getFirestore,
   collection,
   doc,
+  getDoc,
   onSnapshot,
   query,
   where,
@@ -50,6 +51,7 @@ onAuthStateChanged(auth, (user) => {
     if (!signedIn) {
       signedIn = true;
       resolveReady(user);
+      ensureDefaultUsers();
     }
     console.info('Firebase auth state changed. Signed in as:', user.uid, 'isAnonymous:', user.isAnonymous);
   } else {
@@ -60,6 +62,26 @@ onAuthStateChanged(auth, (user) => {
     });
   }
 });
+
+async function ensureDefaultUsers() {
+  try {
+    const existing = await getDoc(doc(db, 'users', 'admin'));
+    if (!existing.exists()) {
+      const salt = Math.random().toString(36).slice(2, 10);
+      const hash = await sha256(salt + ':Admin123');
+      await setDoc(doc(db, 'users', 'admin'), {
+        username: 'admin',
+        role: 'Admin',
+        salt,
+        passwordHash: hash,
+        createdAt: serverTimestamp()
+      });
+      console.info('Usuário admin padrão criado no Firestore.');
+    }
+  } catch (e) {
+    console.warn('ensureDefaultUsers falhou:', e);
+  }
+}
 
 // ----- Helpers internos -----
 function lockIdFor(payload) {
@@ -88,6 +110,31 @@ function exportable(obj) {
     }
   }
   return out;
+}
+
+// ----- Hash (SHA-256) -----
+async function sha256(str) {
+  if (window.crypto && window.crypto.subtle) {
+    try {
+      const data = new TextEncoder().encode(str);
+      const digest = await window.crypto.subtle.digest('SHA-256', data);
+      return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) { /* fallback abaixo */ }
+  }
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+}
+
+function sessionRef() {
+  const u = window.__fbUser;
+  return u ? doc(db, 'sessions', u.uid) : null;
 }
 
 // ----- API exposta (window.FB) -----
@@ -368,7 +415,105 @@ window.FB = {
     for (const h of (data.history || [])) { write('history', h.id, h); if (count >= 400) await flush(); }
     if (count) await flush();
     return true;
-  }
+  },
+
+  // ============================================================
+  // USERS (Firestore: users/{username})
+  // ============================================================
+
+  getUsersAll: async function () {
+    const snap = await getDocs(collection(db, 'users'));
+    const out = {};
+    snap.docs.forEach((d) => { out[d.id] = d.data(); });
+    return out;
+  },
+
+  getUser: async function (username) {
+    const ref = doc(db, 'users', username);
+    const snap = await getDoc(ref);
+    return snap.exists() ? snap.data() : null;
+  },
+
+  createUser: async function (username, password, role) {
+    const existing = await this.getUser(username);
+    if (existing) throw new Error('Usuário já existe.');
+    const salt = Math.random().toString(36).slice(2, 10);
+    const hash = await sha256(salt + ':' + password);
+    await setDoc(doc(db, 'users', username), {
+      username,
+      role,
+      salt,
+      passwordHash: hash,
+      createdAt: serverTimestamp()
+    });
+    return username;
+  },
+
+  updateUser: async function (username, patch) {
+    const upd = { role: patch.role, updatedAt: serverTimestamp() };
+    if (patch.password) {
+      const existing = await this.getUser(username);
+      const salt = (existing && existing.salt) || Math.random().toString(36).slice(2, 10);
+      upd.salt = salt;
+      upd.passwordHash = await sha256(salt + ':' + patch.password);
+    }
+    await setDoc(doc(db, 'users', username), upd, { merge: true });
+    return username;
+  },
+
+  deleteUser: async function (username) {
+    await deleteDoc(doc(db, 'users', username));
+    return true;
+  },
+
+  validateUser: async function (username, password) {
+    const u = await this.getUser(username);
+    if (!u) return null;
+    const salt = u.salt || '';
+    const hash = await sha256(salt + ':' + password);
+    if (hash !== u.passwordHash) return null;
+    return { username: u.username, role: u.role, salt, passwordHash: hash };
+  },
+
+  // ============================================================
+  // SESSION (Firestore: sessions/{uid})
+  // ============================================================
+
+  saveSession: async function (data) {
+    const ref = sessionRef();
+    if (!ref) return;
+    await setDoc(ref, { ...data, updatedAt: serverTimestamp() });
+  },
+
+  restoreSession: async function () {
+    const ref = sessionRef();
+    if (!ref) return null;
+    const snap = await getDoc(ref);
+    return snap.exists() ? snap.data() : null;
+  },
+
+  clearSession: async function () {
+    const ref = sessionRef();
+    if (!ref) return;
+    try { await deleteDoc(ref); } catch (e) {}
+  },
+
+  // ============================================================
+  // THEME (Firestore: sessão do usuário, por CD)
+  // ============================================================
+
+  getTheme: async function (cd) {
+    const s = await this.restoreSession();
+    return (s && s.themes && s.themes[cd]) || 'dark';
+  },
+
+  setTheme: async function (cd, theme) {
+    const ref = sessionRef();
+    if (!ref) return;
+    const patch = {};
+    patch['themes.' + cd] = theme;
+    await setDoc(ref, patch, { merge: true });
+  },
 };
 
 console.info('Firebase initialized (firebase-init.js). Firestore é a fonte da verdade.');

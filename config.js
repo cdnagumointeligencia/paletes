@@ -1,14 +1,13 @@
 // ==========================================================================
 // Painel de Configurações (hub — tela de login)
 // Fornecedores, Usuários (acesso restrito ao Admin) e Backup.
-// Compartilha dados via localStorage com as páginas index1/index2.
+// Todos os dados são persistidos no Firestore (sem localStorage).
 // ==========================================================================
 
 (function () {
   'use strict';
 
-  var USERS_KEY = 'paletes.users';
-  var STORAGE_SUPPLIERS = 'paletes.suppliers';
+  var STORAGE_SUPPLIERS = 'paletes.suppliers'; // usado apenas para formatos legados de import
   var CD_SCHEDULE_KEYS = ['paletes.schedules.cd1', 'paletes.schedules.cd2'];
   var CD_HISTORY_KEYS = ['paletes.history.cd1', 'paletes.history.cd2'];
 
@@ -21,18 +20,6 @@
     return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
-  }
-
-  function loadJSON(key, fallback) {
-    try {
-      var raw = localStorage.getItem(key);
-      if (!raw) return fallback;
-      return JSON.parse(raw);
-    } catch (e) { return fallback; }
-  }
-
-  function saveJSON(key, val) {
-    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
   }
 
   function fmtDate(d) {
@@ -77,22 +64,7 @@
 
   // ---------- Histórico ----------
   function addHistoryEvent(type, action, title, details) {
-    CD_HISTORY_KEYS.forEach(function (key) {
-      var history = loadJSON(key, []);
-      if (!Array.isArray(history)) history = [];
-      history.unshift({
-        id: uid(),
-        timestamp: new Date().toISOString(),
-        type: type,
-        action: action,
-        title: title,
-        details: details,
-        user: 'Sistema',
-      });
-      if (history.length > 500) history = history.slice(0, 500);
-      saveJSON(key, history);
-    });
-    // Grava também no Firestore (um evento por CD) para os listeners das app pages.
+    // Grava no Firestore (um evento por CD) para os listeners das app pages.
     if (window.FB && window.FB.addHistoryEvent) {
       var evt = { type: type, action: action, title: title, details: details, user: 'Sistema' };
       ['cd1', 'cd2'].forEach(function (cd) {
@@ -189,23 +161,28 @@
       adminModal.classList.remove('open');
       resetModalConfig();
       modalConfig.classList.add('open');
+      refreshUsers();
       setTimeout(function () { var el = document.getElementById('userConfigSenhaInput'); if (el) el.focus(); }, 120);
     }
 
     function validarAdminModal() {
-      var users = typeof getUsers === 'function' ? getUsers() : (function() { try { return JSON.parse(localStorage.getItem(USERS_KEY)) || {}; } catch (e) { return {}; } })();
-      var admin = users && users.admin ? users.admin : null;
-      var adminPassword = admin && admin.password ? admin.password : 'Admin123';
-      if (!pwdInput) return;
-      if (pwdInput.value && pwdInput.value.trim().toLowerCase() === String(adminPassword).toLowerCase()) {
-        if (errEl) errEl.style.display = 'none';
-        pwdInput.value = '';
-        openConfigAfterAuth();
-      } else {
+      var pwd = pwdInput ? pwdInput.value : '';
+      if (!pwd) return;
+      window.FB.validateUser('admin', pwd).then(function (admin) {
+        if (admin && admin.role === 'Admin') {
+          if (errEl) errEl.style.display = 'none';
+          pwdInput.value = '';
+          openConfigAfterAuth();
+        } else {
+          if (errEl) errEl.style.display = 'block';
+          pwdInput.value = '';
+          pwdInput.focus();
+        }
+      }).catch(function () {
         if (errEl) errEl.style.display = 'block';
         pwdInput.value = '';
         pwdInput.focus();
-      }
+      });
     }
 
     submitBtn.addEventListener('click', validarAdminModal);
@@ -222,6 +199,7 @@
       Array.prototype.forEach.call(configTabs, function (t) { t.classList.toggle('active', t === tab); });
       Array.prototype.forEach.call(configPanes, function (p) { p.classList.toggle('active', p.id === tab.dataset.tab); });
       if (tab.dataset.tab === 'configPaneFornecedores') renderSuppliersList();
+      if (tab.dataset.tab === 'configPaneUsuarios') refreshUsers();
       if (tab.dataset.tab === 'configPaneBackup' && backupGestaoArea.style.display === 'block') renderBackupCurrentInfo();
     });
   });
@@ -248,11 +226,7 @@
     if (window.FB && typeof window.FB.listenSuppliers === 'function') {
       return suppliersCache;
     }
-    var raw = loadJSON(STORAGE_SUPPLIERS, null);
-    if (Array.isArray(raw)) return raw;
-    var seeds = [];
-    saveJSON(STORAGE_SUPPLIERS, seeds);
-    return seeds;
+    return [];
   }
 
   function subscribeSuppliers() {
@@ -374,12 +348,6 @@
     if (window.FB && window.FB.scheduleCountBySupplier) {
       var inUseCount = await window.FB.scheduleCountBySupplier(s.name);
       if (inUseCount > 0 && !confirm('"' + s.name + '" possui ' + inUseCount + ' agendamento(s) vinculado(s). Excluir mesmo assim?')) return;
-    } else {
-      var inUse = CD_SCHEDULE_KEYS.some(function (key) {
-        var schedules = loadJSON(key, []);
-        return Array.isArray(schedules) && schedules.some(function (sch) { return sch.supplier === s.name; });
-      });
-      if (inUse && !confirm('"' + s.name + '" possui agendamentos vinculados. Excluir mesmo assim?')) return;
     }
     try {
       await window.FB.deleteSupplier(id);
@@ -394,7 +362,7 @@
   }
 
   // ==========================================================================
-  // Usuários
+  // Usuários (Firestore: users/{username})
   // ==========================================================================
   var gestaoArea = $('#userConfigGestaoArea');
   var usersList = $('#userConfigList');
@@ -411,14 +379,24 @@
   var cancelUserBtn = $('#cancelUserConfigBtn');
   var editingUserId = null;
 
+  var usersCache = {};
+  var usersLoaded = false;
+
   function getUsers() {
-    var raw = loadJSON(USERS_KEY, null);
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
-    var defaults = {
-      admin: { username: 'Admin', password: 'Admin123', role: 'Admin' },
-    };
-    saveJSON(USERS_KEY, defaults);
-    return defaults;
+    return usersCache;
+  }
+
+  function refreshUsers() {
+    if (window.FB && window.FB.getUsersAll) {
+      return window.FB.getUsersAll().then(function (users) {
+        usersCache = users || {};
+        usersLoaded = true;
+        if (usersList) renderUsersList();
+        return usersCache;
+      });
+    }
+    usersLoaded = true;
+    return Promise.resolve(usersCache);
   }
 
   function renderUsersList() {
@@ -501,11 +479,15 @@
     }
     if (!confirm('Excluir o usuário "@' + users[key].username + '"?')) return;
     var deleted = users[key];
-    delete users[key];
-    saveJSON(USERS_KEY, users);
-    addHistoryEvent('usuario', 'exclusao', 'Usuário excluído', '@' + deleted.username + ' — ' + deleted.role);
-    renderUsersList();
-    toast('Usuário excluído.', 'success');
+    window.FB.deleteUser(key).then(function () {
+      addHistoryEvent('usuario', 'exclusao', 'Usuário excluído', '@' + deleted.username + ' — ' + deleted.role);
+      return refreshUsers();
+    }).then(function () {
+      toast('Usuário excluído.', 'success');
+    }).catch(function (err) {
+      console.error('Erro ao excluir usuário:', err);
+      toast('Erro ao excluir usuário.', 'error');
+    });
   }
 
   deleteUserBtn.addEventListener('click', function () {
@@ -515,7 +497,6 @@
 
   userForm.addEventListener('submit', function (e) {
     e.preventDefault();
-    var users = getUsers();
     var key = userFormId.value;
     var login = userLoginInput.value.trim().toLowerCase();
     var password = userPasswordInput.value;
@@ -531,34 +512,41 @@
       return;
     }
 
+    var p;
     if (key) {
-      if (password) users[key].password = password;
-      users[key].role = role;
-      addHistoryEvent('usuario', 'edicao', 'Usuário editado', '@' + login + ' — ' + role);
-      toast('Usuário atualizado.', 'success');
+      p = window.FB.updateUser(key, { password: password || null, role: role })
+        .then(function () {
+          addHistoryEvent('usuario', 'edicao', 'Usuário editado', '@' + login + ' — ' + role);
+          toast('Usuário atualizado.', 'success');
+        });
     } else {
       if (!password || password.length < 4) {
         toast('Senha deve ter pelo menos 4 caracteres.', 'error');
         return;
       }
-      if (users[login]) {
+      if (getUsers()[login]) {
         toast('Este nome de usuário já existe.', 'error');
         return;
       }
-      users[login] = { username: login, password: password, role: role };
-      addHistoryEvent('usuario', 'criacao', 'Usuário criado', '@' + login + ' — ' + role);
-      toast('Usuário criado.', 'success');
+      p = window.FB.createUser(login, password, role)
+        .then(function () {
+          addHistoryEvent('usuario', 'criacao', 'Usuário criado', '@' + login + ' — ' + role);
+          toast('Usuário criado.', 'success');
+        });
     }
 
-    saveJSON(USERS_KEY, users);
-    closeUserForm();
-    renderUsersList();
+    p.then(function () {
+      closeUserForm();
+      return refreshUsers();
+    }).catch(function (err) {
+      console.error('Erro ao salvar usuário:', err);
+      toast('Erro ao salvar usuário: ' + (err.message || err), 'error');
+    });
   });
 
   // ==========================================================================
   // Backup (acesso restrito ao Admin)
   // ==========================================================================
-  var BACKUP_PREFIXES = ['paletes.', 'nagumo_'];
 
   var backupSenhaArea = $('#backupConfigSenhaArea');
   var backupGestaoArea = $('#backupConfigGestaoArea');
@@ -567,18 +555,23 @@
   var backupSenhaErro = $('#backupConfigSenhaErro');
 
   function validarSenhaBackup() {
-    var users = getUsers();
-    var admin = users.admin;
-    var adminPassword = admin && admin.password ? admin.password : 'Admin123';
-    if (backupSenhaInput.value && backupSenhaInput.value.trim().toLowerCase() === String(adminPassword).toLowerCase()) {
-      backupSenhaArea.style.display = 'none';
-      backupGestaoArea.style.display = 'block';
-      renderBackupCurrentInfo();
-    } else {
+    var pwd = backupSenhaInput.value || '';
+    if (!pwd) return;
+    window.FB.validateUser('admin', pwd).then(function (admin) {
+      if (admin && admin.role === 'Admin') {
+        backupSenhaArea.style.display = 'none';
+        backupGestaoArea.style.display = 'block';
+        renderBackupCurrentInfo();
+      } else {
+        backupSenhaErro.style.display = 'block';
+        backupSenhaInput.value = '';
+        backupSenhaInput.focus();
+      }
+    }).catch(function () {
       backupSenhaErro.style.display = 'block';
       backupSenhaInput.value = '';
       backupSenhaInput.focus();
-    }
+    });
   }
 
   backupSenhaInput.addEventListener('keydown', function (e) {
@@ -595,15 +588,8 @@
   var pendingImportData = null;
 
   function collectBackupData() {
-    var data = { _meta: { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' } };
-    for (var i = 0; i < localStorage.length; i++) {
-      var key = localStorage.key(i);
-      if (key === 'paletes.session') continue;
-      if (BACKUP_PREFIXES.some(function (p) { return key.startsWith(p); })) {
-        try { data[key] = JSON.parse(localStorage.getItem(key)); } catch (e) { data[key] = localStorage.getItem(key); }
-      }
-    }
-    return data;
+    // Dados atuais: fonte da verdade no Firestore.
+    return { _meta: { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' } };
   }
 
   function countRecords(data) {
@@ -616,7 +602,7 @@
         usuarios: (data._users && typeof data._users === 'object') ? Object.keys(data._users).length : 0,
       };
     }
-    // Formato legado (localStorage keys)
+    // Formato legado (chaves localStorage em backup antigo)
     var agendamentos = 0;
     var historico = 0;
     CD_SCHEDULE_KEYS.forEach(function (key) {
@@ -629,7 +615,7 @@
       agendamentos: agendamentos,
       fornecedores: Array.isArray(data[STORAGE_SUPPLIERS]) ? data[STORAGE_SUPPLIERS].length : 0,
       historico: historico,
-      usuarios: data[USERS_KEY] ? Object.keys(data[USERS_KEY]).length : 0,
+      usuarios: data._users ? Object.keys(data._users).length : 0,
     };
   }
 
@@ -665,9 +651,11 @@
       // Fonte da verdade: Firestore (schedules, suppliers, history)
       window.FB.exportAll().then(function (d) {
         d._meta = { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' };
-        d._users = getUsers();
-        downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(d, null, 2), 'application/json');
-        toast('Backup exportado do Firestore!', 'success');
+        return window.FB.getUsersAll().then(function (users) {
+          d._users = users || {};
+          downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(d, null, 2), 'application/json');
+          toast('Backup exportado do Firestore!', 'success');
+        });
       }).catch(function (err) {
         console.error('Erro ao exportar backup do Firestore:', err);
         toast('Erro ao exportar backup do Firestore.', 'error');
@@ -784,11 +772,6 @@
       importData.suppliers = data[STORAGE_SUPPLIERS];
     }
 
-    var safetyBackup = collectBackupData();
-    try {
-      localStorage.setItem('paletes.safety_backup', JSON.stringify(safetyBackup));
-    } catch (e) {}
-
     try {
       if (window.FB && window.FB.importAll) {
         await window.FB.importAll(importData);
@@ -799,9 +782,24 @@
       return;
     }
 
-    // Usuários continuam em localStorage
-    if (data[USERS_KEY] && typeof data[USERS_KEY] === 'object') {
-      saveJSON(USERS_KEY, data[USERS_KEY]);
+    // Usuários importados para o Firestore
+    var usersToImport = data._users || data['paletes.users'];
+    if (usersToImport && typeof usersToImport === 'object' && window.FB) {
+      var entries = Object.keys(usersToImport);
+      for (var i = 0; i < entries.length; i++) {
+        var uname = entries[i];
+        var uobj = usersToImport[uname];
+        try {
+          var existing = await window.FB.getUser(uname);
+          if (existing) {
+            await window.FB.updateUser(uname, { role: uobj.role || 'Operador' });
+          } else {
+            await window.FB.createUser(uname, (uobj.password || 'Operador123'), (uobj.role || 'Operador'));
+          }
+        } catch (e) {
+          console.error('Erro ao importar usuário ' + uname + ':', e);
+        }
+      }
     }
 
     pendingImportData = null;

@@ -1,6 +1,6 @@
 // ==========================================================================
 // Controle de Retirada de Paletes — lógica da aplicação
-// Persistência em localStorage. Sem dependências externas.
+// Persistência no Firestore (online). Sem localStorage.
 // ==========================================================================
 
 (() => {
@@ -8,53 +8,17 @@
 
   const TIME_SLOTS = ['09:00','10:00','11:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00'];
   const PAGE_CD = 'cd1';
-  const STORAGE_SCHEDULES = 'paletes.schedules.' + PAGE_CD;
-  const STORAGE_SUPPLIERS = 'paletes.suppliers';
-  const STORAGE_HISTORY = 'paletes.history.' + PAGE_CD;
 
   const FAKE_SUPPLIERS = ['Distribuidora Vale Verde', 'Transportes Rota Norte', 'Log Express Paulista'];
 
   const WEEKDAYS = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
   const MONTHS = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 
-  // ---------- Migração: chaves legadas compartilhadas → separadas por CD ----------
-  (function migrateLegacyStorage() {
-    try {
-      var legacySchedules = localStorage.getItem('paletes.schedules');
-      if (legacySchedules !== null) {
-        var arr = JSON.parse(legacySchedules);
-        if (Array.isArray(arr)) {
-          var cd1 = arr.filter(function (s) { return (s.cd || 'cd1') === 'cd1'; });
-          var cd2 = arr.filter(function (s) { return (s.cd || 'cd1') === 'cd2'; });
-          localStorage.setItem('paletes.schedules.cd1', JSON.stringify(loadJSON('paletes.schedules.cd1', []).concat(cd1)));
-          localStorage.setItem('paletes.schedules.cd2', JSON.stringify(loadJSON('paletes.schedules.cd2', []).concat(cd2)));
-        }
-        localStorage.removeItem('paletes.schedules');
-      }
-      var legacyHistory = localStorage.getItem('paletes.history');
-      if (legacyHistory !== null) {
-        var hist = JSON.parse(legacyHistory);
-        if (Array.isArray(hist)) {
-          ['paletes.history.cd1', 'paletes.history.cd2'].forEach(function (key) {
-            var existing = loadJSON(key, []);
-            if (!Array.isArray(existing)) existing = [];
-            var existingIds = {};
-            existing.forEach(function (h) { if (h && h.id) existingIds[h.id] = true; });
-            var merged = existing.slice();
-            hist.forEach(function (h) { if (h && h.id && !existingIds[h.id]) merged.push(h); });
-            localStorage.setItem(key, JSON.stringify(merged.slice(0, 500)));
-          });
-        }
-        localStorage.removeItem('paletes.history');
-      }
-    } catch (e) {}
-  })();
-
   // ---------- State ----------
   let state = {
     schedules: [], // will be populated from Firestore listener
     suppliers: [], // PATCH 3: Inicializar vazio, Firestore listener vai preencher
-    history: loadHistory(),
+    history: [],
     currentDate: new Date(),
     currentView: 'calendar',
     editingScheduleId: null,
@@ -66,7 +30,7 @@
     submitting: false,
     deleting: false,
     optimisticUpdates: {}, // PATCH 2: Para backup/rollback de edições
-    pendingHistoryEvents: [], // PATCH 6: Fila offline de eventos de história
+    pendingHistoryEvents: [], // PATCH 6: Fila de eventos de história (em memória)
   };
 
   // ---------- Firebase (fonte da verdade) ----------
@@ -188,91 +152,53 @@
 
   waitForFBWithRetry().then((FB) => {
     if (FB) {
-      subscribeSchedules();
-      subscribeSuppliers();
-      subscribeHistory();
-      // PATCH 6: Sincronizar events offline a cada 30s
-      setInterval(() => {
-        syncPendingHistoryEvents().catch(err => console.error('Erro ao sincronizar history:', err));
-      }, 30000);
-      // Carregar eventos pendentes do localStorage
-      try {
-        const pending = localStorage.getItem('paletes.pending_history_' + PAGE_CD);
-        if (pending) {
-          state.pendingHistoryEvents = JSON.parse(pending);
-          if (state.pendingHistoryEvents.length > 0) {
-            syncPendingHistoryEvents();
-          }
-        }
-      } catch (e) {
-        console.error('Erro ao carregar histórico pendente:', e);
-      }
+      restoreSessionAndInit(FB);
     } else {
-      console.warn('Firebase não inicializado. Modo offline ativado.');
+      console.warn('Firebase não inicializado. Verifique sua conexão.');
       showOfflineNotification();
-      try {
-        state.schedules = loadJSON(STORAGE_SCHEDULES, []).filter((s) => !FAKE_SUPPLIERS.includes(s.supplier));
-        state.suppliers = loadJSON(STORAGE_SUPPLIERS, []).filter((s) => !FAKE_SUPPLIERS.includes(s.name));
-      } catch (e) {
-        console.error('Erro ao carregar localStorage:', e);
-      }
       render();
     }
   });
 
-  (function ensureUsersDefaults() {
+  async function restoreSessionAndInit(FB) {
+    let session = null;
     try {
-      var raw = localStorage.getItem('paletes.users');
-      if (!raw) {
-        var defaults = {
-          admin: { username: 'admin', password: 'Admin123', role: 'Admin' },
-          operador: { username: 'operador', password: 'op123', role: 'Operador' }
-        };
-        localStorage.setItem('paletes.users', JSON.stringify(defaults));
-        return;
-      }
-      var users = JSON.parse(raw);
-      if (!users || typeof users !== 'object' || Array.isArray(users)) {
-        localStorage.setItem('paletes.users', JSON.stringify({ admin: { username: 'admin', password: 'Admin123', role: 'Admin' } }));
-        return;
-      }
-      if (!users.admin) users.admin = { username: 'admin', password: 'Admin123', role: 'Admin' };
-      localStorage.setItem('paletes.users', JSON.stringify(users));
-    } catch (e) {}
-  })();
-
-  function loadJSON(key, fallback) {
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) return fallback;
-      const parsed = JSON.parse(raw);
-      if (key === STORAGE_SCHEDULES && !Array.isArray(parsed)) {
-        console.warn('[Paletes] Dados corrompidos na chave "' + key + '", usando fallback.');
-        return fallback;
-      }
-      if (key === STORAGE_SUPPLIERS && !Array.isArray(parsed)) {
-        console.warn('[Paletes] Dados corrompidos na chave "' + key + '", usando fallback.');
-        return fallback;
-      }
-      return parsed;
+      session = await FB.restoreSession();
     } catch (e) {
-      console.warn('[Paletes] Erro ao ler "' + key + '":', e.message);
-      return fallback;
+      console.warn('Erro ao restaurar sessão:', e);
     }
-  }
-  function saveSchedules() { /* no-op: Firestore é a fonte da verdade */ }
-  function saveSuppliers() { /* no-op: Firestore é a fonte da verdade */ }
+    if (!session || !session.username) {
+      // Sessão não encontrada no Firestore → volta para o login
+      if (session && session.cd && session.cd !== PAGE_CD) {
+        window.location.href = 'index2.html';
+        return;
+      }
+      window.location.href = 'login.html';
+      return;
+    }
+    currentUser = { username: session.username, role: session.role, cd: session.cd };
+    if (els.sidebarUserName) els.sidebarUserName.textContent = currentUser.username;
+    if (els.sidebarUserRole) els.sidebarUserRole.textContent = currentUser.role || '';
 
-  function loadHistory() {
+    // Tema salvo na sessão (Firestore)
     try {
-      const raw = localStorage.getItem(STORAGE_HISTORY);
-      if (raw) return JSON.parse(raw);
-    } catch(e) {}
-    return [];
-  }
-  function saveHistory() { localStorage.setItem(STORAGE_HISTORY, JSON.stringify(state.history)); }
+      const savedTheme = await FB.getTheme(PAGE_CD);
+      if (savedTheme === 'light') applyTheme('light');
+      else applyTheme('dark');
+    } catch (e) {}
 
-  // PATCH 6: Função para sincronizar eventos de história pendentes
+    subscribeSchedules();
+    subscribeSuppliers();
+    subscribeHistory();
+    // PATCH 6: Sincronizar eventos pendentes a cada 30s
+    setInterval(() => {
+      syncPendingHistoryEvents().catch(err => console.error('Erro ao sincronizar history:', err));
+    }, 30000);
+  }
+
+  // ---------- Session ----------
+  let currentUser = null;
+
   function syncPendingHistoryEvents() {
     if (!window.FB || !window.FB.addHistoryEvent || state.pendingHistoryEvents.length === 0) {
       return Promise.resolve();
@@ -289,10 +215,7 @@
             console.error('Erro ao sincronizar evento:', evt.id, err);
           })
       )
-    ).then(() => {
-      localStorage.setItem('paletes.pending_history_' + PAGE_CD,
-        JSON.stringify(state.pendingHistoryEvents));
-    });
+    );
   }
 
   function addHistoryEvent(type, action, title, details) {
@@ -314,16 +237,12 @@
         })
         .catch((err) => {
           console.error('Erro ao sincronizar evento de história:', err);
-          // Guardar para sincronização posterior
+          // Guardar para sincronização posterior (em memória)
           state.pendingHistoryEvents.push({ ...evt, cd: PAGE_CD });
-          localStorage.setItem('paletes.pending_history_' + PAGE_CD, 
-            JSON.stringify(state.pendingHistoryEvents));
         });
     } else {
-      // Offline: guardar para sincronização posterior
+      // Offline: guardar para sincronização posterior (em memória)
       state.pendingHistoryEvents.push({ ...evt, cd: PAGE_CD });
-      localStorage.setItem('paletes.pending_history_' + PAGE_CD, 
-        JSON.stringify(state.pendingHistoryEvents));
     }
     
     // Atualizar UI imediatamente (optimistic)
@@ -427,35 +346,22 @@
     cancelLogout: $('#cancelLogout'),
   };
 
-  // ---------- Theme ----------
-  const STORAGE_THEME = 'paletes.theme.' + PAGE_CD;
+  // ---------- Theme (salvo na sessão, Firestore) ----------
   function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
     const icon = els.themeToggle.querySelector('i');
     icon.className = theme === 'light' ? 'fas fa-sun' : 'fas fa-moon';
     els.themeToggle.setAttribute('aria-label', theme === 'light' ? 'Mudar para modo escuro' : 'Mudar para modo claro');
-    localStorage.setItem(STORAGE_THEME, theme);
   }
-  applyTheme(localStorage.getItem(STORAGE_THEME) === 'light' ? 'light' : 'dark');
+  applyTheme('dark');
   els.themeToggle.addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-    applyTheme(current === 'light' ? 'dark' : 'light');
+    const next = current === 'light' ? 'dark' : 'light';
+    applyTheme(next);
+    if (window.FB && window.FB.setTheme) {
+      window.FB.setTheme(PAGE_CD, next).catch((err) => console.error('Erro ao salvar tema:', err));
+    }
   });
-
-  // ---------- User session ----------
-  function loadSession() {
-    try {
-      var raw = localStorage.getItem('paletes.session');
-      if (raw) return JSON.parse(raw);
-    } catch(e) {}
-    return null;
-  }
-
-  const currentUser = loadSession();
-  if (currentUser) {
-    els.sidebarUserName.textContent = currentUser.username;
-    els.sidebarUserRole.textContent = currentUser.role || '';
-  }
 
   // ---------- Toasts ----------
   function toast(message, kind = '') {
@@ -1027,11 +933,6 @@
         console.error('Erro ao limpar histórico:', err);
         toast('Erro ao limpar histórico.', 'error');
       });
-    } else {
-      state.history = [];
-      saveHistory();
-      renderHistory();
-      toast('Histórico limpo.', 'success');
     }
   });
 
@@ -1089,48 +990,30 @@
   }
 
   // ---------- Backup ----------
-  const BACKUP_PREFIXES = ['paletes.', 'nagumo_'];
-
-  function collectBackupData() {
-    const data = { _meta: { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' } };
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key === 'paletes.session') continue;
-      if (BACKUP_PREFIXES.some((p) => key.startsWith(p))) {
-        try { data[key] = JSON.parse(localStorage.getItem(key)); } catch(e) { data[key] = localStorage.getItem(key); }
-      }
+  function exportBackup() {
+    if (window.FB && window.FB.exportAll) {
+      // Fonte da verdade: Firestore (schedules, suppliers, history)
+      window.FB.exportAll().then((data) => {
+        data._meta = { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' };
+        downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
+        toast('Backup exportado do Firestore!', 'success');
+      }).catch((err) => {
+        console.error('Erro ao exportar backup do Firestore:', err);
+        toast('Erro ao exportar backup do Firestore.', 'error');
+      });
     }
-    return data;
   }
-
-   function exportBackup() {
-     if (window.FB && window.FB.exportAll) {
-       // Fonte da verdade: Firestore (schedules, suppliers, history)
-       window.FB.exportAll().then((data) => {
-         data._meta = { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' };
-         downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
-         toast('Backup exportado do Firestore!', 'success');
-       }).catch((err) => {
-         console.error('Erro ao exportar backup do Firestore:', err);
-         toast('Erro ao exportar backup do Firestore.', 'error');
-       });
-     } else {
-       const data = collectBackupData();
-       downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
-       toast('Backup exportado com sucesso!', 'success');
-     }
-   }
 
   function doBackupAndLogout() {
     exportBackup();
     setTimeout(() => {
-      localStorage.removeItem('paletes.session');
+      if (window.FB && window.FB.clearSession) window.FB.clearSession();
       window.location.href = 'login.html';
     }, 800);
   }
 
   function doLogout() {
-    localStorage.removeItem('paletes.session');
+    if (window.FB && window.FB.clearSession) window.FB.clearSession();
     window.location.href = 'login.html';
   }
 
