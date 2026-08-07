@@ -1,6 +1,9 @@
 // firebase-init.js
-// Inicialização do Firebase + helpers básicos para Firestore
-// INSTRUÇÕES: substitua o objeto firebaseConfig abaixo pelas credenciais do seu projeto Firebase.
+// Inicialização do Firebase + helpers. O Firestore é a FONTE DA VERDADE.
+// Regras de consistência (anti race condition):
+//  - Criação de agendamento usa lock por slot (slotLocks) em transação.
+//  - Atualização valida o slot de destino na transação e libera o lock ao cancelar.
+//  - Exclusão remove schedule + lock de forma atômica.
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
@@ -11,13 +14,15 @@ import {
   onSnapshot,
   query,
   where,
+  orderBy,
   addDoc,
   setDoc,
   updateDoc,
   deleteDoc,
   writeBatch,
   runTransaction,
-  serverTimestamp
+  serverTimestamp,
+  getDocs
 } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js';
 
 // Firebase configuration provided by user
@@ -34,13 +39,20 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Auto sign-in anônimo para dev: garante request.auth != null para regras que exigem autenticação
+// ----- Auth -----
+let signedIn = false;
+let resolveReady;
+const ready = new Promise((resolve) => { resolveReady = resolve; });
+
 onAuthStateChanged(auth, (user) => {
   if (user) {
     window.__fbUser = user;
+    if (!signedIn) {
+      signedIn = true;
+      resolveReady(user);
+    }
     console.info('Firebase auth state changed. Signed in as:', user.uid, 'isAnonymous:', user.isAnonymous);
   } else {
-    // tenta autenticar anonimamente
     signInAnonymously(auth).then((cred) => {
       console.info('Signed in anonymously:', cred.user.uid);
     }).catch((err) => {
@@ -49,113 +61,314 @@ onAuthStateChanged(auth, (user) => {
   }
 });
 
-// Helpers expostos em window.FB para uso a partir de scripts não-module
+// ----- Helpers internos -----
+function lockIdFor(payload) {
+  return `${payload.cd}_${payload.date}_${payload.time}`.replace(/\s+/g, '_');
+}
+
+function isoOf(v) {
+  if (!v) return null;
+  if (typeof v.toDate === 'function') return v.toDate().toISOString();
+  if (typeof v.toMillis === 'function') return new Date(v.toMillis()).toISOString();
+  return String(v);
+}
+
+// Converte Timestamps/objetos do Firestore em valores serializáveis (ISO strings).
+function exportable(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v && typeof v === 'object') {
+      if (typeof v.toDate === 'function') out[k] = v.toDate().toISOString();
+      else if (typeof v.toMillis === 'function') out[k] = new Date(v.toMillis()).toISOString();
+      else if ('seconds' in v && 'nanoseconds' in v) out[k] = new Date(v.seconds * 1000).toISOString();
+      else if (Array.isArray(v)) out[k] = v.map((x) => (x && typeof x === 'object' ? exportable(x) : x));
+      else out[k] = exportable(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+// ----- API exposta (window.FB) -----
 window.FB = {
   app,
   auth,
   db,
-  // Escuta schedules em tempo real para um CD específico
-  listenSchedulesByCD: function(cd, onChange) {
+  ready,
+  whenReady: () => ready,
+
+  // ============================================================
+  // SCHEDULES
+  // ============================================================
+
+  // Listener com range opcional {from, to} (YYYY-MM-DD). Sem range, escuta tudo.
+  listenSchedulesByCD: function (cd, onChange, opts) {
     try {
       const col = collection(db, 'schedules');
-      const q = query(col, where('cd', '==', cd));
-      const unsub = onSnapshot(q, (snap) => {
-        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const q = (opts && opts.from && opts.to)
+        ? query(col, where('cd', '==', cd), where('date', '>=', opts.from), where('date', '<=', opts.to), orderBy('date', 'asc'))
+        : query(col, where('cd', '==', cd));
+      return onSnapshot(q, (snap) => {
+        const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         onChange(docs, snap);
       }, (err) => {
         console.error('listenSchedulesByCD error', err);
       });
-      return unsub;
     } catch (e) {
       console.error('listenSchedulesByCD failed', e);
-      return function(){};
+      return function () {};
     }
   },
 
-  // Cria um agendamento de forma atômica usando um lock por slot para evitar race conditions
-  createScheduleAtomic: async function(payload) {
-    // payload must include: cd, date (YYYY-MM-DD), time (HH:mm), supplier, pallets, status, createdBy
-    const lockId = `${payload.cd}_${payload.date}_${payload.time}`.replace(/\s+/g,'_');
-    const lockRef = doc(db, 'slotLocks', lockId);
+  getAllSchedulesByCD: async function (cd) {
+    const q = query(collection(db, 'schedules'), where('cd', '==', cd));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  // Cria agendamento de forma atômica usando lock por slot (evita reserva dupla).
+  // Se historyEvent for informado, o registro vai na MESMA transação (atomicidade).
+  createScheduleAtomic: async function (payload, historyEvent) {
+    const lockRef = doc(db, 'slotLocks', lockIdFor(payload));
     const schedulesCol = collection(db, 'schedules');
 
     return runTransaction(db, async (tx) => {
       const lockSnap = await tx.get(lockRef);
       if (lockSnap.exists()) {
-        // if a lock exists, assume slot taken
         throw new Error('Slot already reserved');
       }
-      // create schedule doc
       const newDocRef = doc(schedulesCol);
       tx.set(newDocRef, { ...payload, createdAt: serverTimestamp() });
-      // create lock pointing to schedule id
-      tx.set(lockRef, { scheduleId: newDocRef.id, cd: payload.cd, date: payload.date, time: payload.time, createdAt: serverTimestamp() });
+      tx.set(lockRef, {
+        scheduleId: newDocRef.id,
+        cd: payload.cd,
+        date: payload.date,
+        time: payload.time,
+        status: 'active',
+        createdAt: serverTimestamp()
+      });
+      if (historyEvent) {
+        tx.set(doc(collection(db, 'history')), {
+          ...historyEvent,
+          cd: payload.cd,
+          createdAt: serverTimestamp()
+        });
+      }
       return newDocRef.id;
     });
   },
 
-  // Liberar lock de um slot quando um agendamento é removido ou cancelado (call on cancellation)
-  releaseSlotLock: async function(payload) {
-    const lockId = `${payload.cd}_${payload.date}_${payload.time}`.replace(/\s+/g,'_');
-    const lockRef = doc(db, 'slotLocks', lockId);
-    try {
-      await setDoc(lockRef, { releasedAt: serverTimestamp(), status: 'released' }, { merge: true });
-    } catch (e) { console.warn('releaseSlotLock failed', e); }
-  },
+  // Update transacional: valida o slot de destino e gerencia locks.
+  // - Se o agendamento é CANCELADO, o lock do slot é removido (horário liberado).
+  // - Se o horário muda, o novo slot é validado e o lock é migrado.
+  updateSchedule: async function (id, patch, historyEvent) {
+    const ref = doc(db, 'schedules', id);
+    return runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('Agendamento não encontrado.');
 
-  addHistoryEvent: async function(event) {
-    // event: { cd, scheduleId, type, action, title, details, user }
-    try {
-      await addDoc(collection(db, 'history'), { ...event, createdAt: serverTimestamp() });
-    } catch (e) { console.error('addHistoryEvent failed', e); }
-  },
+      const prev = snap.data();
+      const prevLockId = lockIdFor(prev);
+      const nextLockId = lockIdFor({ ...prev, ...patch });
+      const wasActive = prev.status !== 'Cancelado';
+      const slotChanged = prevLockId !== nextLockId;
+      const becomingCancelled = patch.status === 'Cancelado' && wasActive;
 
-  createSupplier: async function(payload) {
-    try {
-      const ref = await addDoc(collection(db, 'suppliers'), { ...payload, createdAt: serverTimestamp() });
-      return ref.id;
-    } catch (e) { console.error('createSupplier failed', e); throw e; }
-  },
+      if (slotChanged && wasActive && !becomingCancelled) {
+        const newLockRef = doc(db, 'slotLocks', nextLockId);
+        const newLock = await tx.get(newLockRef);
+        if (newLock.exists()) {
+          const owner = newLock.data();
+          if (owner.scheduleId !== id) throw new Error('Slot already reserved');
+        }
+      }
 
-  // Update an existing schedule document
-  updateSchedule: async function(id, patch) {
-    try {
-      const ref = doc(db, 'schedules', id);
-      await updateDoc(ref, { ...patch, updatedAt: serverTimestamp() });
-      return true;
-    } catch (e) {
-      console.error('updateSchedule failed', e);
-      throw e;
-    }
-  },
+      tx.update(ref, { ...patch, updatedAt: serverTimestamp() });
 
-  // Delete a schedule and release the slot lock
-  deleteSchedule: async function(id, schedule) {
-    try {
-      const ref = doc(db, 'schedules', id);
-      await deleteDoc(ref);
-      // release lock
-      if (schedule && schedule.cd && schedule.date && schedule.time) {
-        const lockId = `${schedule.cd}_${schedule.date}_${schedule.time}`.replace(/\s+/g,'_');
-        const lockRef = doc(db, 'slotLocks', lockId);
-        await setDoc(lockRef, { releasedAt: serverTimestamp(), status: 'released' }, { merge: true });
+      if (becomingCancelled) {
+        tx.delete(doc(db, 'slotLocks', prevLockId));
+      } else if (slotChanged && wasActive) {
+        tx.delete(doc(db, 'slotLocks', prevLockId));
+        tx.set(doc(db, 'slotLocks', nextLockId), {
+          scheduleId: id,
+          cd: patch.cd || prev.cd,
+          date: patch.date || prev.date,
+          time: patch.time || prev.time,
+          status: 'active',
+          createdAt: serverTimestamp()
+        });
+      }
+
+      if (historyEvent) {
+        tx.set(doc(collection(db, 'history')), {
+          ...historyEvent,
+          cd: patch.cd || prev.cd,
+          createdAt: serverTimestamp()
+        });
       }
       return true;
+    });
+  },
+
+  // Exclui agendamento e libera o lock de forma atômica.
+  deleteSchedule: async function (id, schedule) {
+    const ref = doc(db, 'schedules', id);
+    return runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      const data = snap.exists() ? snap.data() : (schedule || {});
+      tx.delete(ref);
+      if (data.cd && data.date && data.time) {
+        tx.delete(doc(db, 'slotLocks', lockIdFor(data)));
+      }
+      return true;
+    });
+  },
+
+  // Libera um lock manualmente (uso de emergência).
+  releaseSlotLock: async function (payload) {
+    return deleteDoc(doc(db, 'slotLocks', lockIdFor(payload)));
+  },
+
+  // ============================================================
+  // HISTORY
+  // ============================================================
+
+  listenHistoryByCD: function (cd, onChange) {
+    try {
+      const q = query(collection(db, 'history'), where('cd', '==', cd));
+      return onSnapshot(q, (snap) => {
+        const docs = snap.docs.map((d) => {
+          const data = d.data();
+          return { id: d.id, ...data, timestamp: isoOf(data.createdAt) || data.timestamp };
+        });
+        docs.sort((a, b) => (new Date(b.timestamp || 0).getTime()) - (new Date(a.timestamp || 0).getTime()));
+        onChange(docs, snap);
+      }, (err) => {
+        console.error('listenHistoryByCD error', err);
+      });
     } catch (e) {
-      console.error('deleteSchedule failed', e);
-      throw e;
+      console.error('listenHistoryByCD failed', e);
+      return function () {};
     }
   },
 
-  // Utility: batched updates for pendentes
-  flushBatchedUpdates: async function(items) {
-    // items: [{ ref: DocumentReference, patch: {...} }, ...]
+  addHistoryEvent: async function (event) {
+    return addDoc(collection(db, 'history'), { ...event, createdAt: serverTimestamp() });
+  },
+
+  clearHistoryByCD: async function (cd) {
+    const q = query(collection(db, 'history'), where('cd', '==', cd));
+    const snap = await getDocs(q);
+    let batch = writeBatch(db);
+    let count = 0;
+    let total = 0;
+    for (const d of snap.docs) {
+      batch.delete(d.ref);
+      count++;
+      total++;
+      if (count >= 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count) await batch.commit();
+    return total;
+  },
+
+  // ============================================================
+  // SUPPLIERS (globais)
+  // ============================================================
+
+  listenSuppliers: function (onChange) {
     try {
-      const batch = writeBatch(db);
-      items.forEach(it => batch.update(it.ref, it.patch));
+      return onSnapshot(collection(db, 'suppliers'), (snap) => {
+        const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        onChange(docs, snap);
+      }, (err) => {
+        console.error('listenSuppliers error', err);
+      });
+    } catch (e) {
+      console.error('listenSuppliers failed', e);
+      return function () {};
+    }
+  },
+
+  createSupplier: async function (payload) {
+    const ref = await addDoc(collection(db, 'suppliers'), { ...payload, createdAt: serverTimestamp() });
+    return ref.id;
+  },
+
+  updateSupplier: async function (id, patch) {
+    return updateDoc(doc(db, 'suppliers', id), { ...patch, updatedAt: serverTimestamp() });
+  },
+
+  deleteSupplier: async function (id) {
+    return deleteDoc(doc(db, 'suppliers', id));
+  },
+
+  scheduleCountBySupplier: async function (name) {
+    const q = query(collection(db, 'schedules'), where('supplier', '==', name));
+    const snap = await getDocs(q);
+    return snap.size;
+  },
+
+  // Renomeia fornecedor e atualiza os agendamentos que referenciam o nome antigo.
+  renameSupplier: async function (oldName, newName) {
+    const q = query(collection(db, 'schedules'), where('supplier', '==', oldName));
+    const snap = await getDocs(q);
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const d of snap.docs) {
+      batch.update(d.ref, { supplier: newName });
+      count++;
+      if (count >= 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count) await batch.commit();
+    return snap.size;
+  },
+
+  // ============================================================
+  // BACKUP / EXPORT (fonte da verdade)
+  // ============================================================
+
+  exportAll: async function () {
+    const [schedSnap, suppSnap, histSnap] = await Promise.all([
+      getDocs(collection(db, 'schedules')),
+      getDocs(collection(db, 'suppliers')),
+      getDocs(collection(db, 'history'))
+    ]);
+    return {
+      schedules: schedSnap.docs.map((d) => ({ id: d.id, ...exportable(d.data()) })),
+      suppliers: suppSnap.docs.map((d) => ({ id: d.id, ...exportable(d.data()) })),
+      history: histSnap.docs.map((d) => ({ id: d.id, ...exportable(d.data()) }))
+    };
+  },
+
+  importAll: async function (data) {
+    let batch = writeBatch(db);
+    let count = 0;
+    const write = (col, id, obj) => {
+      const ref = id ? doc(db, col, id) : doc(collection(db, col));
+      batch.set(ref, { ...obj, migratedAt: serverTimestamp() }, { merge: true });
+      count++;
+    };
+    const flush = async () => {
       await batch.commit();
-    } catch (e) { console.error('flushBatchedUpdates failed', e); throw e; }
+      batch = writeBatch(db);
+      count = 0;
+    };
+    for (const s of (data.schedules || [])) { write('schedules', s.id, s); if (count >= 400) await flush(); }
+    for (const s of (data.suppliers || [])) { write('suppliers', s.id, s); if (count >= 400) await flush(); }
+    for (const h of (data.history || [])) { write('history', h.id, h); if (count >= 400) await flush(); }
+    if (count) await flush();
+    return true;
   }
 };
 
-console.info('Firebase initialized (firebase-init.js). Replace firebaseConfig with your project credentials.');
+console.info('Firebase initialized (firebase-init.js). Firestore é a fonte da verdade.');

@@ -53,7 +53,7 @@
   // ---------- State ----------
   let state = {
     schedules: [], // will be populated from Firestore listener
-    suppliers: loadJSON(STORAGE_SUPPLIERS, []).filter((s) => !FAKE_SUPPLIERS.includes(s.name)),
+    suppliers: [], // PATCH 3: Inicializar vazio, Firestore listener vai preencher
     history: loadHistory(),
     currentDate: new Date(),
     currentView: 'calendar',
@@ -63,22 +63,162 @@
     historyTypeFilter: 'all',
     historyActionFilter: 'all',
     historySearchQuery: '',
+    submitting: false,
+    deleting: false,
+    optimisticUpdates: {}, // PATCH 2: Para backup/rollback de edições
+    pendingHistoryEvents: [], // PATCH 6: Fila offline de eventos de história
   };
-  // localStorage schedules are deprecated; suppliers still loaded locally until migration
-  saveSuppliers();
 
-  // Attach Firestore listener for schedules if FB is available
-  if (window.FB && typeof window.FB.listenSchedulesByCD === 'function') {
-    window.FB.listenSchedulesByCD(PAGE_CD, function(docs) {
+  // ---------- Firebase (fonte da verdade) ----------
+  let unsubSchedules = null;
+  let unsubSuppliers = null;
+  let unsubHistory = null;
+  let activeRange = null;
+
+  // Janela de dados escutada: cobre histórico recente + agenda futura,
+  // em vez de baixar TODOS os agendamentos (otimização de custo/leituras).
+  function scheduleRange() {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth() - 18, 1);
+    const to = new Date(now.getFullYear(), now.getMonth() + 12, 1);
+    return { from: fmtDate(from), to: fmtDate(to) };
+  }
+
+  function subscribeSchedules() {
+    if (unsubSchedules) { unsubSchedules(); unsubSchedules = null; }
+    const range = scheduleRange();
+    activeRange = range;
+    unsubSchedules = window.FB.listenSchedulesByCD(PAGE_CD, (docs) => {
       state.schedules = docs.filter((s) => !FAKE_SUPPLIERS.includes(s.supplier));
       render();
-    });
-  } else {
-    console.info('FB not initialized yet; loading schedules from localStorage as fallback.');
-    try {
-      state.schedules = loadJSON(STORAGE_SCHEDULES, []).filter((s) => !FAKE_SUPPLIERS.includes(s.supplier));
-    } catch (e) {}
+    }, range);
   }
+
+  // Se o usuário navegar para uma data fora da janela, expande a assinatura.
+  function ensureRangeCovers(dateStr) {
+    if (!window.FB || !activeRange) return;
+    if (dateStr < activeRange.from || dateStr > activeRange.to) {
+      subscribeSchedules();
+    }
+  }
+
+  function subscribeSuppliers() {
+    if (unsubSuppliers) { unsubSuppliers(); unsubSuppliers = null; }
+    unsubSuppliers = window.FB.listenSuppliers((docs) => {
+      state.suppliers = docs.filter((s) => !FAKE_SUPPLIERS.includes(s.name));
+      // PATCH 4: Renderizar quando suppliers mudam
+      if (state.currentView === 'suppliers' || state.currentView === 'calendar') {
+        render();
+      }
+    });
+  }
+
+  function subscribeHistory() {
+    if (unsubHistory) { unsubHistory(); unsubHistory = null; }
+    unsubHistory = window.FB.listenHistoryByCD(PAGE_CD, (docs) => {
+      state.history = docs;
+      renderHistory();
+    });
+  }
+
+  // PATCH 5: Função para notificação de modo offline
+  function showOfflineNotification() {
+    const notif = document.createElement('div');
+    notif.className = 'offline-banner';
+    notif.innerHTML = `
+      <i class="fas fa-wifi-slash"></i>
+      <span>Modo offline. Dados podem estar desatualizados. Verifique sua conexão.</span>
+    `;
+    document.body.insertBefore(notif, document.body.firstChild);
+    
+    // Adicionar CSS
+    const style = document.createElement('style');
+    style.textContent = `
+      .offline-banner {
+        background: var(--status-cancelado);
+        color: white;
+        padding: 12px;
+        text-align: center;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // PATCH 5: Retry com exponencial backoff
+  function waitForFBWithRetry(maxRetries = 3, timeoutMs = 15000) {
+    return new Promise((resolve) => {
+      let retries = 0;
+      
+      function attempt() {
+        retries++;
+        console.log(`Tentando inicializar Firebase (tentativa ${retries}/${maxRetries})...`);
+        
+        const startTime = Date.now();
+        const timer = setInterval(() => {
+          if (window.FB && window.FB.whenReady) {
+            clearInterval(timer);
+            console.log(`Firebase inicializado na tentativa ${retries}`);
+            resolve(window.FB);
+          } else if (Date.now() - startTime > timeoutMs) {
+            clearInterval(timer);
+            
+            if (retries < maxRetries) {
+              const delay = Math.min(1000 * Math.pow(2, retries - 1), 10000); // backoff exponencial
+              console.warn(`Tentativa ${retries} falhou. Tentando novamente em ${delay}ms...`);
+              setTimeout(attempt, delay);
+            } else {
+              console.error(`Firebase não inicializou após ${maxRetries} tentativas. Usando fallback.`);
+              resolve(null);
+            }
+          }
+        }, 100);
+      }
+      
+      attempt();
+    });
+  }
+
+  waitForFBWithRetry().then((FB) => {
+    if (FB) {
+      subscribeSchedules();
+      subscribeSuppliers();
+      subscribeHistory();
+      // PATCH 6: Sincronizar events offline a cada 30s
+      setInterval(() => {
+        syncPendingHistoryEvents().catch(err => console.error('Erro ao sincronizar history:', err));
+      }, 30000);
+      // Carregar eventos pendentes do localStorage
+      try {
+        const pending = localStorage.getItem('paletes.pending_history_' + PAGE_CD);
+        if (pending) {
+          state.pendingHistoryEvents = JSON.parse(pending);
+          if (state.pendingHistoryEvents.length > 0) {
+            syncPendingHistoryEvents();
+          }
+        }
+      } catch (e) {
+        console.error('Erro ao carregar histórico pendente:', e);
+      }
+    } else {
+      console.warn('Firebase não inicializado. Modo offline ativado.');
+      showOfflineNotification();
+      try {
+        state.schedules = loadJSON(STORAGE_SCHEDULES, []).filter((s) => !FAKE_SUPPLIERS.includes(s.supplier));
+        state.suppliers = loadJSON(STORAGE_SUPPLIERS, []).filter((s) => !FAKE_SUPPLIERS.includes(s.name));
+      } catch (e) {
+        console.error('Erro ao carregar localStorage:', e);
+      }
+      render();
+    }
+  });
 
   (function ensureUsersDefaults() {
     try {
@@ -120,8 +260,8 @@
       return fallback;
     }
   }
-  function saveSchedules() { console.info('saveSchedules is a no-op; using Firestore for persistence'); }
-  function saveSuppliers() { localStorage.setItem(STORAGE_SUPPLIERS, JSON.stringify(state.suppliers)); }
+  function saveSchedules() { /* no-op: Firestore é a fonte da verdade */ }
+  function saveSuppliers() { /* no-op: Firestore é a fonte da verdade */ }
 
   function loadHistory() {
     try {
@@ -132,18 +272,64 @@
   }
   function saveHistory() { localStorage.setItem(STORAGE_HISTORY, JSON.stringify(state.history)); }
 
+  // PATCH 6: Função para sincronizar eventos de história pendentes
+  function syncPendingHistoryEvents() {
+    if (!window.FB || !window.FB.addHistoryEvent || state.pendingHistoryEvents.length === 0) {
+      return Promise.resolve();
+    }
+
+    const pending = [...state.pendingHistoryEvents];
+    return Promise.all(
+      pending.map(evt =>
+        window.FB.addHistoryEvent(evt)
+          .then(() => {
+            state.pendingHistoryEvents = state.pendingHistoryEvents.filter(e => e.id !== evt.id);
+          })
+          .catch(err => {
+            console.error('Erro ao sincronizar evento:', evt.id, err);
+          })
+      )
+    ).then(() => {
+      localStorage.setItem('paletes.pending_history_' + PAGE_CD,
+        JSON.stringify(state.pendingHistoryEvents));
+    });
+  }
+
   function addHistoryEvent(type, action, title, details) {
-    state.history.unshift({
+    const evt = {
       id: uid(),
-      timestamp: new Date().toISOString(),
       type,
       action,
       title,
       details,
       user: currentUser ? (currentUser.username) : 'Sistema',
-    });
+      timestamp: new Date().toISOString(),
+    };
+
+    // PATCH 6: Primeiro tenta enviar para Firestore
+    if (window.FB && window.FB.addHistoryEvent) {
+      window.FB.addHistoryEvent({ cd: PAGE_CD, ...evt })
+        .then(() => {
+          console.log('Evento de história sincronizado:', evt.id);
+        })
+        .catch((err) => {
+          console.error('Erro ao sincronizar evento de história:', err);
+          // Guardar para sincronização posterior
+          state.pendingHistoryEvents.push({ ...evt, cd: PAGE_CD });
+          localStorage.setItem('paletes.pending_history_' + PAGE_CD, 
+            JSON.stringify(state.pendingHistoryEvents));
+        });
+    } else {
+      // Offline: guardar para sincronização posterior
+      state.pendingHistoryEvents.push({ ...evt, cd: PAGE_CD });
+      localStorage.setItem('paletes.pending_history_' + PAGE_CD, 
+        JSON.stringify(state.pendingHistoryEvents));
+    }
+    
+    // Atualizar UI imediatamente (optimistic)
+    state.history.unshift(evt);
     if (state.history.length > 500) state.history = state.history.slice(0, 500);
-    saveHistory();
+    renderHistory();
   }
 
   function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
@@ -306,9 +492,9 @@
   els.sidebarToggle.addEventListener('click', () => els.sidebar.classList.toggle('collapsed'));
   els.mobileMenuBtn.addEventListener('click', () => els.sidebar.classList.toggle('mobile-open'));
 
-  els.prevDay.addEventListener('click', () => { state.currentDate.setDate(state.currentDate.getDate() - 1); render(); });
-  els.nextDay.addEventListener('click', () => { state.currentDate.setDate(state.currentDate.getDate() + 1); render(); });
-  els.todayBtn.addEventListener('click', () => { state.currentDate = new Date(); render(); });
+  els.prevDay.addEventListener('click', () => { state.currentDate.setDate(state.currentDate.getDate() - 1); ensureRangeCovers(fmtDate(state.currentDate)); render(); });
+  els.nextDay.addEventListener('click', () => { state.currentDate.setDate(state.currentDate.getDate() + 1); ensureRangeCovers(fmtDate(state.currentDate)); render(); });
+  els.todayBtn.addEventListener('click', () => { state.currentDate = new Date(); ensureRangeCovers(fmtDate(state.currentDate)); render(); });
 
   els.searchInput.addEventListener('input', (e) => { state.searchQuery = e.target.value.trim().toLowerCase(); renderList(); });
   els.statusFilter.addEventListener('change', renderList);
@@ -652,87 +838,120 @@
   els.scheduleForm.addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const editing = els.scheduleId.value ? state.schedules.find((sc) => sc.id === els.scheduleId.value) : null;
-    const wasConfirmed = editing && editing.status === 'Confirmado';
-    const statusChanged = wasConfirmed && els.status.value !== 'Confirmado';
-    const fieldsLocked = wasConfirmed && !statusChanged;
-    const willConfirm = els.status.value === 'Confirmado' && (!editing || !wasConfirmed);
+    // Guarda anti duplo-submit: evita criação duplicada por clique duplo/Enter
+    if (state.submitting) return;
+    state.submitting = true;
+    els.saveBtn.disabled = true;
 
-    if (willConfirm) {
-      if (!confirm('Ao confirmar o agendamento, a edição será bloqueada. Esta ação não pode ser desfeita. Deseja continuar?')) {
+    try {
+      const editing = els.scheduleId.value ? state.schedules.find((sc) => sc.id === els.scheduleId.value) : null;
+      const wasConfirmed = editing && editing.status === 'Confirmado';
+      const statusChanged = wasConfirmed && els.status.value !== 'Confirmado';
+      const fieldsLocked = wasConfirmed && !statusChanged;
+      const willConfirm = els.status.value === 'Confirmado' && (!editing || !wasConfirmed);
+
+      if (willConfirm) {
+        if (!confirm('Ao confirmar o agendamento, a edição será bloqueada. Esta ação não pode ser desfeita. Deseja continuar?')) {
+          return;
+        }
+      }
+
+      const pallets = fieldsLocked ? editing.pallets : Number(els.pallets.value);
+      if (!fieldsLocked && pallets > 1000) {
+        toast('Máximo de 1000 paletes por slot.', 'error');
         return;
       }
-    }
 
-    const pallets = fieldsLocked ? editing.pallets : Number(els.pallets.value);
-    if (!fieldsLocked && pallets > 1000) {
-      toast('Máximo de 1000 paletes por slot.', 'error');
-      return;
-    }
+      const payload = {
+        date: els.scheduleDate.value,
+        time: els.scheduleTime.value,
+        supplier: els.supplierInput.value.trim(),
+        pallets,
+        driver: els.driver.value.trim(),
+        plate: els.plate.value.trim().toUpperCase(),
+        status: els.status.value,
+        cd: PAGE_CD,
+        tipoPalete: fieldsLocked ? editing.tipoPalete : els.scheduleTipoPalete.value,
+        notes: els.notes.value.trim(),
+        createdBy: currentUser ? currentUser.username : 'unknown',
+      };
 
-    const payload = {
-      date: els.scheduleDate.value,
-      time: els.scheduleTime.value,
-      supplier: els.supplierInput.value.trim(),
-      pallets,
-      driver: els.driver.value.trim(),
-      plate: els.plate.value.trim().toUpperCase(),
-      status: els.status.value,
-      cd: PAGE_CD,
-      tipoPalete: fieldsLocked ? editing.tipoPalete : els.scheduleTipoPalete.value,
-      notes: els.notes.value.trim(),
-      createdBy: currentUser ? currentUser.username : 'unknown',
-    };
+      // Conflict check local (UX rápida). A validação definitiva é feita
+      // pela TRANSAÇÃO no Firestore (createScheduleAtomic/updateSchedule), que
+      // usa slotLocks — elimina a race condition de reserva dupla.
+      const conflict = state.schedules.find((s) =>
+        s.date === payload.date && s.time === payload.time && s.status !== 'Cancelado' && s.id !== els.scheduleId.value
+      );
+      if (conflict) {
+        toast(`Horário ${payload.time} já ocupado por ${conflict.supplier}.`, 'error');
+        return;
+      }
 
-    // Conflict check: same date+time, active status, different id
-    const conflict = state.schedules.find((s) =>
-      s.date === payload.date && s.time === payload.time && s.status !== 'Cancelado' && s.id !== els.scheduleId.value
-    );
-    if (conflict) {
-      toast(`Horário ${payload.time} já ocupado por ${conflict.supplier}.`, 'error');
-      return;
-    }
+      const historyEvent = {
+        type: 'agendamento',
+        action: els.scheduleId.value ? 'edicao' : 'criacao',
+        title: els.scheduleId.value ? 'Agendamento editado' : 'Agendamento criado',
+        details: `${payload.supplier} — ${formatDateBR(payload.date)} ${payload.time} — ${payload.pallets} paletes ${payload.tipoPalete} — ${payload.status}`,
+        user: currentUser ? currentUser.username : 'Sistema',
+      };
 
-    if (els.scheduleId.value) {
-      const s = state.schedules.find((sc) => sc.id === els.scheduleId.value);
-      const oldStatus = s.status;
-      // update via Firestore
-      try {
+      if (els.scheduleId.value) {
+        const s = state.schedules.find((sc) => sc.id === els.scheduleId.value);
+        const oldStatus = s.status;
         const patch = { ...payload };
+        
         if (payload.status === 'Confirmado' && oldStatus !== 'Confirmado') {
           patch.confirmedBy = currentUser ? currentUser.username : 'unknown';
           patch.confirmedAt = new Date().toISOString();
         }
-        await window.FB.updateSchedule(els.scheduleId.value, patch);
-        addHistoryEvent('agendamento', 'edicao', 'Agendamento editado',
-          `${payload.supplier} — ${formatDateBR(payload.date)} ${payload.time} — ${payload.pallets} paletes ${payload.tipoPalete} — ${payload.status}`);
-        toast('Agendamento atualizado.', 'success');
-      } catch (err) {
-        console.error('Erro ao atualizar agendamento:', err);
-        toast('Erro ao atualizar agendamento: ' + (err.message || err), 'error');
-        return;
-      }
-    } else {
-      // create via Firestore (atomic)
-      try {
-        if (payload.status === 'Confirmado') {
-          payload.confirmedBy = currentUser ? currentUser.username : 'unknown';
-          payload.confirmedAt = new Date().toISOString();
-        }
-        const newId = await window.FB.createScheduleAtomic(payload);
-        addHistoryEvent('agendamento', 'criacao', 'Agendamento criado',
-          `${payload.supplier} — ${formatDateBR(payload.date)} ${payload.time} — ${payload.pallets} paletes ${payload.tipoPalete} — ${payload.status}`);
-        toast('Agendamento criado.', 'success');
-      } catch (err) {
-        console.error('Erro ao criar agendamento:', err);
-        toast('Erro ao criar agendamento: ' + (err.message || err), 'error');
-        return;
-      }
-    }
 
-    // no local save; Firestore listener will update state
-    closeScheduleModal();
-    render();
+        // PATCH 2: Guardar estado antigo para rollback
+        state.optimisticUpdates[els.scheduleId.value] = {
+          old: { ...s },
+          new: patch,
+        };
+
+        try {
+          await window.FB.updateSchedule(els.scheduleId.value, patch, historyEvent);
+          toast('Agendamento atualizado.', 'success');
+          // Listener do Firestore atualiza state automaticamente
+        } catch (err) {
+          console.error('Erro ao atualizar agendamento:', err);
+          // PATCH 2: Reverter optimistic update em caso de erro
+          if (state.optimisticUpdates[els.scheduleId.value]) {
+            const idx = state.schedules.findIndex(sc => sc.id === els.scheduleId.value);
+            if (idx >= 0) {
+              state.schedules[idx] = state.optimisticUpdates[els.scheduleId.value].old;
+              render();
+            }
+            delete state.optimisticUpdates[els.scheduleId.value];
+          }
+          toast('Erro ao atualizar agendamento: ' + (err.message || err), 'error');
+          return;
+        }
+      } else {
+        try {
+          if (payload.status === 'Confirmado') {
+            payload.confirmedBy = currentUser ? currentUser.username : 'unknown';
+            payload.confirmedAt = new Date().toISOString();
+          }
+          await window.FB.createScheduleAtomic(payload, historyEvent);
+          toast('Agendamento criado.', 'success');
+          // Listener do Firestore adiciona ao state automaticamente
+        } catch (err) {
+          console.error('Erro ao criar agendamento:', err);
+          toast('Erro ao criar agendamento: ' + (err.message || err), 'error');
+          return;
+        }
+      }
+
+      // History entra na MESMA transação (atomicidade). Listener do Firestore atualiza o state.
+      closeScheduleModal();
+      render();
+    } finally {
+      state.submitting = false;
+      els.saveBtn.disabled = false;
+    }
   });
 
   // ---------- Delete confirmation ----------
@@ -747,15 +966,19 @@
   els.closeConfirmModal.addEventListener('click', closeConfirmModal);
   els.cancelConfirmBtn.addEventListener('click', closeConfirmModal);
   els.confirmDeleteBtn.addEventListener('click', async () => {
-    if (!state.pendingDeleteId) return;
-    const id = state.pendingDeleteId;
-    const deleted = state.schedules.find((s) => s.id === id);
+    if (!state.pendingDeleteId || state.deleting) return;
+    state.deleting = true;
+    els.confirmDeleteBtn.disabled = true;
     try {
+      const id = state.pendingDeleteId;
+      const deleted = state.schedules.find((s) => s.id === id);
+      
+      // PATCH 1: Aguardar Firestore confirmar ANTES de remover da UI
       await window.FB.deleteSchedule(id, deleted);
-      // Firestore listener will update state; optionally remove locally for immediate UI
-      state.schedules = state.schedules.filter((s) => s.id !== id);
+      
+      // Listener do Firestore atualizará state automaticamente
       closeConfirmModal();
-      render();
+      
       if (deleted) {
         addHistoryEvent('agendamento', 'exclusao', 'Agendamento excluído',
           `${deleted.supplier} — ${formatDateBR(deleted.date)} ${deleted.time} — ${deleted.pallets} paletes`);
@@ -764,6 +987,9 @@
     } catch (err) {
       console.error('Erro ao excluir agendamento:', err);
       toast('Erro ao excluir agendamento: ' + (err.message || err), 'error');
+    } finally {
+      state.deleting = false;
+      els.confirmDeleteBtn.disabled = false;
     }
   });
 
@@ -792,10 +1018,21 @@
   els.historySearchInput.addEventListener('input', (e) => { state.historySearchQuery = e.target.value.trim().toLowerCase(); renderHistory(); });
   els.clearHistoryBtn.addEventListener('click', () => {
     if (!confirm('Limpar todo o histórico de movimentações?')) return;
-    state.history = [];
-    saveHistory();
-    renderHistory();
-    toast('Histórico limpo.', 'success');
+    if (window.FB && window.FB.clearHistoryByCD) {
+      window.FB.clearHistoryByCD(PAGE_CD).then(() => {
+        state.history = [];
+        renderHistory();
+        toast('Histórico limpo.', 'success');
+      }).catch((err) => {
+        console.error('Erro ao limpar histórico:', err);
+        toast('Erro ao limpar histórico.', 'error');
+      });
+    } else {
+      state.history = [];
+      saveHistory();
+      renderHistory();
+      toast('Histórico limpo.', 'success');
+    }
   });
 
   function renderHistory() {
@@ -855,7 +1092,7 @@
   const BACKUP_PREFIXES = ['paletes.', 'nagumo_'];
 
   function collectBackupData() {
-    const data = { _meta: { version: 1, timestamp: new Date().toISOString(), app: 'paletes-agendamento' } };
+    const data = { _meta: { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' } };
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key === 'paletes.session') continue;
@@ -867,9 +1104,21 @@
   }
 
    function exportBackup() {
-     const data = collectBackupData();
-     downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
-     toast('Backup exportado com sucesso!', 'success');
+     if (window.FB && window.FB.exportAll) {
+       // Fonte da verdade: Firestore (schedules, suppliers, history)
+       window.FB.exportAll().then((data) => {
+         data._meta = { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' };
+         downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
+         toast('Backup exportado do Firestore!', 'success');
+       }).catch((err) => {
+         console.error('Erro ao exportar backup do Firestore:', err);
+         toast('Erro ao exportar backup do Firestore.', 'error');
+       });
+     } else {
+       const data = collectBackupData();
+       downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
+       toast('Backup exportado com sucesso!', 'success');
+     }
    }
 
   function doBackupAndLogout() {

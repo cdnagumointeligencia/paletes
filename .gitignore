@@ -1,4 +1,5 @@
 node_modules/
+.firebase/
 .playwright-mcp/
 .DS_Store
 Thumbs.db

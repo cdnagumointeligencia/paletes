@@ -92,6 +92,15 @@
       if (history.length > 500) history = history.slice(0, 500);
       saveJSON(key, history);
     });
+    // Grava também no Firestore (um evento por CD) para os listeners das app pages.
+    if (window.FB && window.FB.addHistoryEvent) {
+      var evt = { type: type, action: action, title: title, details: details, user: 'Sistema' };
+      ['cd1', 'cd2'].forEach(function (cd) {
+        window.FB.addHistoryEvent({ cd: cd, ...evt }).catch(function (err) {
+          console.error('addHistoryEvent (Firestore) failed:', err);
+        });
+      });
+    }
   }
 
   // ---------- Overlay helpers ----------
@@ -231,13 +240,31 @@
   var supplierEmailInput = $('#supplierConfigEmail');
   var cancelSupplierBtn = $('#cancelSupplierConfigBtn');
 
+  // Fornecedores via Firestore (fonte da verdade). Cache local para renderização síncrona.
+  var suppliersCache = [];
+  var suppliersLoaded = false;
+
   function getSuppliers() {
+    if (window.FB && typeof window.FB.listenSuppliers === 'function') {
+      return suppliersCache;
+    }
     var raw = loadJSON(STORAGE_SUPPLIERS, null);
     if (Array.isArray(raw)) return raw;
     var seeds = [];
     saveJSON(STORAGE_SUPPLIERS, seeds);
     return seeds;
   }
+
+  function subscribeSuppliers() {
+    if (window.FB && typeof window.FB.listenSuppliers === 'function') {
+      window.FB.listenSuppliers(function (docs) {
+        suppliersCache = docs || [];
+        suppliersLoaded = true;
+        if (supplierList) renderSuppliersList();
+      });
+    }
+  }
+  subscribeSuppliers();
 
   function renderSuppliersList() {
     var suppliers = getSuppliers();
@@ -297,9 +324,8 @@
     setTimeout(function () { supplierNameInput.focus(); }, 100);
   }
 
-  supplierForm.addEventListener('submit', function (e) {
+  supplierForm.addEventListener('submit', async function (e) {
     e.preventDefault();
-    var suppliers = getSuppliers();
     var id = supplierFormId.value;
     var payload = {
       name: supplierNameInput.value.trim(),
@@ -311,51 +337,57 @@
       toast('Informe o nome do fornecedor.', 'error');
       return;
     }
-    if (suppliers.some(function (sp) { return sp.id !== id && sp.name.toLowerCase() === payload.name.toLowerCase(); })) {
+    if (suppliersCache.some(function (sp) { return sp.id !== id && sp.name.toLowerCase() === payload.name.toLowerCase(); })) {
       toast('Já existe um fornecedor com esse nome.', 'error');
       return;
     }
 
-    if (id) {
-      var s = suppliers.find(function (sp) { return sp.id === id; });
-      if (!s) { toast('Fornecedor não encontrado.', 'error'); return; }
-      var oldName = s.name;
-      s.phone = payload.phone;
-      s.email = payload.email;
-      if (oldName !== payload.name) {
-        s.name = payload.name;
-        CD_SCHEDULE_KEYS.forEach(function (key) {
-          var schedules = loadJSON(key, []);
-          if (Array.isArray(schedules)) {
-            schedules.forEach(function (sch) { if (sch.supplier === oldName) sch.supplier = payload.name; });
-            saveJSON(key, schedules);
-          }
-        });
+    try {
+      if (id) {
+        var s = suppliersCache.find(function (sp) { return sp.id === id; });
+        if (!s) { toast('Fornecedor não encontrado.', 'error'); return; }
+        var oldName = s.name;
+        await window.FB.updateSupplier(id, { name: payload.name, phone: payload.phone, email: payload.email });
+        if (oldName !== payload.name && window.FB.renameSupplier) {
+          await window.FB.renameSupplier(oldName, payload.name);
+        }
+        addHistoryEvent('fornecedor', 'edicao', 'Fornecedor editado', payload.name + (payload.phone ? ' — ' + payload.phone : ''));
+        toast('Fornecedor atualizado.', 'success');
+      } else {
+        await window.FB.createSupplier(payload);
+        addHistoryEvent('fornecedor', 'criacao', 'Fornecedor cadastrado', payload.name + (payload.phone ? ' — ' + payload.phone : ''));
+        toast('Fornecedor cadastrado.', 'success');
       }
-      addHistoryEvent('fornecedor', 'edicao', 'Fornecedor editado', payload.name + (payload.phone ? ' — ' + payload.phone : ''));
-      toast('Fornecedor atualizado.', 'success');
-    } else {
-      suppliers.push({ id: uid(), name: payload.name, phone: payload.phone, email: payload.email });
-      addHistoryEvent('fornecedor', 'criacao', 'Fornecedor cadastrado', payload.name + (payload.phone ? ' — ' + payload.phone : ''));
-      toast('Fornecedor cadastrado.', 'success');
+    } catch (err) {
+      console.error('Erro ao salvar fornecedor:', err);
+      toast('Erro ao salvar fornecedor: ' + (err.message || err), 'error');
+      return;
     }
 
-    saveJSON(STORAGE_SUPPLIERS, suppliers);
     supplierFormArea.classList.add('hidden');
     renderSuppliersList();
   });
 
-  function deleteSupplier(id) {
-    var suppliers = getSuppliers();
-    var s = suppliers.find(function (sp) { return sp.id === id; });
+  async function deleteSupplier(id) {
+    var s = suppliersCache.find(function (sp) { return sp.id === id; });
     if (!s) return;
-    var inUse = CD_SCHEDULE_KEYS.some(function (key) {
-      var schedules = loadJSON(key, []);
-      return Array.isArray(schedules) && schedules.some(function (sch) { return sch.supplier === s.name; });
-    });
-    if (inUse && !confirm('"' + s.name + '" possui agendamentos vinculados. Excluir mesmo assim?')) return;
-    suppliers = suppliers.filter(function (sp) { return sp.id !== id; });
-    saveJSON(STORAGE_SUPPLIERS, suppliers);
+    if (window.FB && window.FB.scheduleCountBySupplier) {
+      var inUseCount = await window.FB.scheduleCountBySupplier(s.name);
+      if (inUseCount > 0 && !confirm('"' + s.name + '" possui ' + inUseCount + ' agendamento(s) vinculado(s). Excluir mesmo assim?')) return;
+    } else {
+      var inUse = CD_SCHEDULE_KEYS.some(function (key) {
+        var schedules = loadJSON(key, []);
+        return Array.isArray(schedules) && schedules.some(function (sch) { return sch.supplier === s.name; });
+      });
+      if (inUse && !confirm('"' + s.name + '" possui agendamentos vinculados. Excluir mesmo assim?')) return;
+    }
+    try {
+      await window.FB.deleteSupplier(id);
+    } catch (err) {
+      console.error('Erro ao excluir fornecedor:', err);
+      toast('Erro ao excluir fornecedor.', 'error');
+      return;
+    }
     addHistoryEvent('fornecedor', 'exclusao', 'Fornecedor excluído', s.name);
     renderSuppliersList();
     toast('Fornecedor removido.', 'success');
@@ -563,7 +595,7 @@
   var pendingImportData = null;
 
   function collectBackupData() {
-    var data = { _meta: { version: 1, timestamp: new Date().toISOString(), app: 'paletes-agendamento' } };
+    var data = { _meta: { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' } };
     for (var i = 0; i < localStorage.length; i++) {
       var key = localStorage.key(i);
       if (key === 'paletes.session') continue;
@@ -575,6 +607,16 @@
   }
 
   function countRecords(data) {
+    // Formato Firestore (exportAll): { schedules, suppliers, history }
+    if (Array.isArray(data.schedules) || Array.isArray(data.history) || Array.isArray(data.suppliers)) {
+      return {
+        agendamentos: Array.isArray(data.schedules) ? data.schedules.length : 0,
+        fornecedores: Array.isArray(data.suppliers) ? data.suppliers.length : 0,
+        historico: Array.isArray(data.history) ? data.history.length : 0,
+        usuarios: (data._users && typeof data._users === 'object') ? Object.keys(data._users).length : 0,
+      };
+    }
+    // Formato legado (localStorage keys)
     var agendamentos = 0;
     var historico = 0;
     CD_SCHEDULE_KEYS.forEach(function (key) {
@@ -591,11 +633,8 @@
     };
   }
 
-  function renderBackupCurrentInfo() {
-    var data = collectBackupData();
-    var counts = countRecords(data);
-    var ts = data._meta ? data._meta.timestamp : null;
-    backupCurrentInfo.innerHTML = `
+  function backupInfoHtml(counts, ts) {
+    return `
       <h4>Dados Atuais do Sistema</h4>
       <div class="backup-current-row"><span>Agendamentos</span><strong>${counts.agendamentos}</strong></div>
       <div class="backup-current-row"><span>Fornecedores</span><strong>${counts.fornecedores}</strong></div>
@@ -605,10 +644,39 @@
     `;
   }
 
-  function exportBackup() {
+  function renderBackupCurrentInfo() {
+    if (window.FB && window.FB.exportAll) {
+      window.FB.exportAll().then(function (d) {
+        var counts = countRecords(d);
+        backupCurrentInfo.innerHTML = backupInfoHtml(counts, (d._meta && d._meta.timestamp) || null);
+      }).catch(function (err) {
+        console.error('Erro ao consultar dados do Firestore:', err);
+        var data = collectBackupData();
+        backupCurrentInfo.innerHTML = backupInfoHtml(countRecords(data), data._meta ? data._meta.timestamp : null);
+      });
+      return;
+    }
     var data = collectBackupData();
-    downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
-    toast('Backup exportado com sucesso!', 'success');
+    backupCurrentInfo.innerHTML = backupInfoHtml(countRecords(data), data._meta ? data._meta.timestamp : null);
+  }
+
+  function exportBackup() {
+    if (window.FB && window.FB.exportAll) {
+      // Fonte da verdade: Firestore (schedules, suppliers, history)
+      window.FB.exportAll().then(function (d) {
+        d._meta = { version: 2, timestamp: new Date().toISOString(), app: 'paletes-agendamento', source: 'firestore' };
+        d._users = getUsers();
+        downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(d, null, 2), 'application/json');
+        toast('Backup exportado do Firestore!', 'success');
+      }).catch(function (err) {
+        console.error('Erro ao exportar backup do Firestore:', err);
+        toast('Erro ao exportar backup do Firestore.', 'error');
+      });
+    } else {
+      var data = collectBackupData();
+      downloadFile('backup_paletes_' + fmtDate(new Date()) + '_' + Date.now() + '.json', JSON.stringify(data, null, 2), 'application/json');
+      toast('Backup exportado com sucesso!', 'success');
+    }
   }
 
   function handleImportFile(file) {
@@ -686,31 +754,34 @@
     reader.readAsText(file);
   }
 
-  function executeImport() {
+  async function executeImport() {
     if (!pendingImportData) return;
     var data = pendingImportData;
+    var importData = { schedules: [], suppliers: [], history: [] };
 
-    if ('paletes.schedules' in data && !(CD_SCHEDULE_KEYS[0] in data) && !(CD_SCHEDULE_KEYS[1] in data)) {
-      var legacySchedules = data['paletes.schedules'];
-      var cd1s = [], cd2s = [];
-      if (Array.isArray(legacySchedules)) {
-        cd1s = legacySchedules.filter(function (s) { return (s.cd || 'cd1') === 'cd1'; });
-        cd2s = legacySchedules.filter(function (s) { return (s.cd || 'cd1') === 'cd2'; });
-      }
-      data[CD_SCHEDULE_KEYS[0]] = cd1s;
-      data[CD_SCHEDULE_KEYS[1]] = cd2s;
+    // Normaliza formatos: Firestore (schedules/suppliers/history) ou legado (chaves localStorage)
+    if (Array.isArray(data.schedules)) {
+      importData.schedules = data.schedules;
+    } else {
+      CD_SCHEDULE_KEYS.forEach(function (key, idx) {
+        var cd = idx === 0 ? 'cd1' : 'cd2';
+        var arr = Array.isArray(data[key]) ? data[key] : [];
+        arr.forEach(function (s) { importData.schedules.push(Object.assign({}, s, { cd: s.cd || cd })); });
+      });
     }
-    if ('paletes.history' in data && !(CD_HISTORY_KEYS[0] in data) && !(CD_HISTORY_KEYS[1] in data)) {
-      data[CD_HISTORY_KEYS[0]] = data['paletes.history'];
-      data[CD_HISTORY_KEYS[1]] = data['paletes.history'];
+    if (Array.isArray(data.history)) {
+      importData.history = data.history;
+    } else {
+      CD_HISTORY_KEYS.forEach(function (key, idx) {
+        var cd = idx === 0 ? 'cd1' : 'cd2';
+        var arr = Array.isArray(data[key]) ? data[key] : [];
+        arr.forEach(function (h) { importData.history.push(Object.assign({}, h, { cd: h.cd || cd })); });
+      });
     }
-
-    var requiredKeys = CD_SCHEDULE_KEYS.concat([STORAGE_SUPPLIERS, USERS_KEY]);
-    for (var i = 0; i < requiredKeys.length; i++) {
-      if (!(requiredKeys[i] in data)) {
-        toast('Backup incompleto — chave "' + requiredKeys[i] + '" ausente.', 'error');
-        return;
-      }
+    if (Array.isArray(data.suppliers)) {
+      importData.suppliers = data.suppliers;
+    } else if (Array.isArray(data[STORAGE_SUPPLIERS])) {
+      importData.suppliers = data[STORAGE_SUPPLIERS];
     }
 
     var safetyBackup = collectBackupData();
@@ -718,12 +789,19 @@
       localStorage.setItem('paletes.safety_backup', JSON.stringify(safetyBackup));
     } catch (e) {}
 
-    for (var key in data) {
-      if (key === '_meta') continue;
-      if (key === 'paletes.schedules' || key === 'paletes.history') continue;
-      try { localStorage.setItem(key, JSON.stringify(data[key])); } catch (e) {
-        toast('Erro ao salvar chave "' + key + '" durante importação.', 'error');
+    try {
+      if (window.FB && window.FB.importAll) {
+        await window.FB.importAll(importData);
       }
+    } catch (err) {
+      console.error('Erro ao importar backup no Firestore:', err);
+      toast('Erro ao importar backup no Firestore.', 'error');
+      return;
+    }
+
+    // Usuários continuam em localStorage
+    if (data[USERS_KEY] && typeof data[USERS_KEY] === 'object') {
+      saveJSON(USERS_KEY, data[USERS_KEY]);
     }
 
     pendingImportData = null;

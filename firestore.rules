@@ -1,6 +1,14 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // PATCH 8: Validação de CD (fonte de verdade no backend)
+    match /schedules/{document=**} {
+      allow create: if request.auth != null && request.resource.data.cd in ['cd1', 'cd2'];
+      allow update: if request.auth != null && resource.data.cd in ['cd1', 'cd2'] && request.resource.data.cd == resource.data.cd;
+      allow delete: if request.auth != null;
+      allow read: if request.auth != null;
+    }
+
     // Uso interno: qualquer usuário autenticado (incl. anônimo) pode ler/escrever.
     match /{document=**} {
       allow read, write: if request.auth != null;
