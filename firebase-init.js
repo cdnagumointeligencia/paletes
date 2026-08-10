@@ -353,18 +353,25 @@ window.FB = {
   // SUPPLIERS (globais)
   // ============================================================
 
-  listenSuppliers: function (onChange) {
+  listenSuppliers: function (onChange, onError) {
     try {
       return onSnapshot(collection(db, 'suppliers'), (snap) => {
         const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         onChange(docs, snap);
       }, (err) => {
         console.error('listenSuppliers error', err);
+        if (onError) onError(err);
       });
     } catch (e) {
       console.error('listenSuppliers failed', e);
       return function () {};
     }
+  },
+
+  // Busca única dos fornecedores (fallback ao listener em tempo real).
+  getAllSuppliers: async function () {
+    const snap = await getDocs(collection(db, 'suppliers'));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
 
   createSupplier: async function (payload) {

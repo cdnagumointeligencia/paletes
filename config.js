@@ -130,6 +130,8 @@
       // fallback: abrir diretamente
       resetModalConfig();
       modalConfig.classList.add('open');
+      renderSuppliersList();
+      refreshSuppliers();
       setTimeout(function () { var el = document.getElementById('userConfigSenhaInput'); if (el) el.focus(); }, 120);
       return;
     }
@@ -156,6 +158,8 @@
       resetModalConfig();
       modalConfig.classList.add('open');
       refreshUsers();
+      renderSuppliersList();
+      refreshSuppliers();
       setTimeout(function () { var el = document.getElementById('userConfigSenhaInput'); if (el) el.focus(); }, 120);
     }
 
@@ -192,7 +196,7 @@
     tab.addEventListener('click', function () {
       Array.prototype.forEach.call(configTabs, function (t) { t.classList.toggle('active', t === tab); });
       Array.prototype.forEach.call(configPanes, function (p) { p.classList.toggle('active', p.id === tab.dataset.tab); });
-      if (tab.dataset.tab === 'configPaneFornecedores') renderSuppliersList();
+      if (tab.dataset.tab === 'configPaneFornecedores') { renderSuppliersList(); refreshSuppliers(); }
       if (tab.dataset.tab === 'configPaneUsuarios') refreshUsers();
       if (tab.dataset.tab === 'configPaneBackup' && backupGestaoArea.style.display === 'block') renderBackupCurrentInfo();
     });
@@ -215,6 +219,7 @@
   // Fornecedores via Firestore (fonte da verdade). Cache local para renderização síncrona.
   var suppliersCache = [];
   var suppliersLoaded = false;
+  var suppliersSubscribed = false;
 
   function getSuppliers() {
     if (window.FB && typeof window.FB.listenSuppliers === 'function') {
@@ -223,26 +228,71 @@
     return [];
   }
 
+  // Assina os fornecedores APÓS a autenticação anônima estar pronta. Antes disso,
+  // o onSnapshot inicial podia falhar com PERMISSION_DENIED (sem token) e, como o
+  // erro não tinha reconexão, a lista ficava vazia para sempre mesmo com dados no
+  // Firestore. Adiciona reconexão automática + busca única de fallback.
   function subscribeSuppliers() {
-    // firebase-init.js é módulo (deferido): pode ainda não ter definido window.FB
-    // quando este script roda. Espera até existir e então registra o listener.
     function register() {
-      if (window.FB && typeof window.FB.listenSuppliers === 'function') {
-        window.FB.listenSuppliers(function (docs) {
-          suppliersCache = docs || [];
-          suppliersLoaded = true;
-          if (supplierList) renderSuppliersList();
-        });
-      } else {
+      // firebase-init.js é módulo (deferido): pode ainda não ter definido window.FB
+      if (!(window.FB && typeof window.FB.listenSuppliers === 'function')) {
         setTimeout(register, 100);
+        return;
       }
+      var readyP = (window.FB.ready && typeof window.FB.ready.then === 'function')
+        ? window.FB.ready
+        : window.FB.whenReady();
+      var attached = false;
+      function attach() {
+        if (attached) return;
+        attached = true;
+        attachSuppliersListener();
+      }
+      readyP.then(attach, attach);
+      setTimeout(attach, 8000); // fallback: não bloquear se o auth nunca resolver
     }
     register();
   }
+
+  function attachSuppliersListener() {
+    if (suppliersSubscribed) return;
+    suppliersSubscribed = true;
+    if (window.FB && typeof window.FB.listenSuppliers === 'function') {
+      window.FB.listenSuppliers(function (docs) {
+        suppliersCache = docs || [];
+        suppliersLoaded = true;
+        if (supplierList) renderSuppliersList();
+      }, function () {
+        // Falha ao escutar (ex.: auth ainda não pronto): tenta de novo.
+        suppliersSubscribed = false;
+        setTimeout(attachSuppliersListener, 1500);
+      });
+    }
+    refreshSuppliers();
+  }
+
+  // Busca única no Firestore para popular a lista imediatamente,
+  // mesmo que o listener em tempo real atrase ou falhe.
+  function refreshSuppliers() {
+    if (window.FB && typeof window.FB.getAllSuppliers === 'function') {
+      window.FB.getAllSuppliers().then(function (docs) {
+        suppliersCache = docs || [];
+        suppliersLoaded = true;
+        if (supplierList) renderSuppliersList();
+      }).catch(function (err) {
+        console.error('getAllSuppliers failed', err);
+      });
+    }
+  }
+
   subscribeSuppliers();
 
   function renderSuppliersList() {
     var suppliers = getSuppliers();
+    if (!suppliersLoaded) {
+      supplierList.innerHTML = '<div class="empty-state"><i class="fas fa-spinner fa-spin"></i>Carregando fornecedores...</div>';
+      return;
+    }
     if (!suppliers.length) {
       supplierList.innerHTML = '<div class="empty-state"><i class="fas fa-truck"></i>Nenhum fornecedor cadastrado ainda.</div>';
       return;
