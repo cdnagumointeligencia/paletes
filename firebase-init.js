@@ -63,24 +63,45 @@ onAuthStateChanged(auth, (user) => {
   }
 });
 
+const DEFAULT_ADMIN_PASSWORD = 'admin123';
+const LEGACY_DEFAULT_ADMIN_PASSWORD = 'Admin123';
+
 async function ensureDefaultUsers() {
   try {
-    const existing = await getDoc(doc(db, 'users', 'admin'));
+    const docRef = doc(db, 'users', 'admin');
+    const existing = await getDoc(docRef);
     const data = existing.exists() ? existing.data() : null;
     // Repara o admin se não existir OU se estiver sem credenciais válidas
     // (migração legada pode ter gravado o doc sem salt/passwordHash).
     const needsRepair = !existing.exists() || !data || !data.salt || !data.passwordHash;
-    if (needsRepair) {
-      const salt = Math.random().toString(36).slice(2, 10);
-      const hash = await sha256(salt + ':Admin123');
-      await setDoc(doc(db, 'users', 'admin'), {
+
+    let salt = needsRepair ? Math.random().toString(36).slice(2, 10) : data.salt;
+    let hash = needsRepair ? await sha256(salt + ':' + DEFAULT_ADMIN_PASSWORD) : data.passwordHash;
+
+    // Migração da senha padrão: se o admin ainda usa a senha padrão antiga
+    // (Admin123), atualiza automaticamente para a nova padrão (admin123).
+    // Senhas personalizadas não são alteradas.
+    let migrated = false;
+    if (!needsRepair) {
+      const oldDefaultHash = await sha256(data.salt + ':' + LEGACY_DEFAULT_ADMIN_PASSWORD);
+      if (data.passwordHash === oldDefaultHash) {
+        salt = Math.random().toString(36).slice(2, 10);
+        hash = await sha256(salt + ':' + DEFAULT_ADMIN_PASSWORD);
+        migrated = true;
+      }
+    }
+
+    if (needsRepair || migrated) {
+      await setDoc(docRef, {
         username: 'admin',
         role: 'Admin',
         salt,
         passwordHash: hash,
         updatedAt: serverTimestamp()
       });
-      console.info('Usuário admin padrão criado/reparado no Firestore.');
+      console.info(needsRepair
+        ? 'Usuário admin padrão criado/reparado no Firestore.'
+        : 'Senha padrão do admin migrada (Admin123 -> admin123).');
     }
   } catch (e) {
     console.warn('ensureDefaultUsers falhou:', e);

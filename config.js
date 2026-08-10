@@ -66,7 +66,7 @@
   function addHistoryEvent(type, action, title, details) {
     // Grava no Firestore (um evento por CD) para os listeners das app pages.
     if (window.FB && window.FB.addHistoryEvent) {
-      var evt = { type: type, action: action, title: title, details: details, user: 'Sistema' };
+      var evt = { type: type, action: action, title: title, details: details, user: 'Admin' };
       ['cd1', 'cd2'].forEach(function (cd) {
         window.FB.addHistoryEvent({ cd: cd, ...evt }).catch(function (err) {
           console.error('addHistoryEvent (Firestore) failed:', err);
@@ -113,14 +113,8 @@
     var supplierFormAreaEl = document.getElementById('supplierConfigFormArea');
     if (supplierFormAreaEl) supplierFormAreaEl.classList.add('hidden');
 
-    var backupSenhaAreaEl = document.getElementById('backupConfigSenhaArea');
-    if (backupSenhaAreaEl) backupSenhaAreaEl.style.display = '';
     var backupGestaoAreaEl = document.getElementById('backupConfigGestaoArea');
-    if (backupGestaoAreaEl) backupGestaoAreaEl.style.display = 'none';
-    var backupSenhaInputEl = document.getElementById('backupConfigSenhaInput');
-    if (backupSenhaInputEl) backupSenhaInputEl.value = '';
-    var backupSenhaErroEl = document.getElementById('backupConfigSenhaErro');
-    if (backupSenhaErroEl) backupSenhaErroEl.style.display = 'none';
+    if (backupGestaoAreaEl) backupGestaoAreaEl.style.display = 'block';
 
     pendingImportData = null;
     var backupConfirmEl = document.getElementById('backupConfigConfirm');
@@ -552,39 +546,10 @@
   });
 
   // ==========================================================================
-  // Backup (acesso restrito ao Admin)
+  // Backup (acesso restrito ao Admin — autenticado ao abrir as Configurações)
   // ==========================================================================
 
-  var backupSenhaArea = $('#backupConfigSenhaArea');
   var backupGestaoArea = $('#backupConfigGestaoArea');
-  var backupSenhaInput = $('#backupConfigSenhaInput');
-  var backupSenhaBtn = $('#backupConfigSenhaBtn');
-  var backupSenhaErro = $('#backupConfigSenhaErro');
-
-  function validarSenhaBackup() {
-    var pwd = backupSenhaInput.value || '';
-    if (!pwd) return;
-    window.FB.validateUser('admin', pwd).then(function (admin) {
-      if (admin && admin.role === 'Admin') {
-        backupSenhaArea.style.display = 'none';
-        backupGestaoArea.style.display = 'block';
-        renderBackupCurrentInfo();
-      } else {
-        backupSenhaErro.style.display = 'block';
-        backupSenhaInput.value = '';
-        backupSenhaInput.focus();
-      }
-    }).catch(function () {
-      backupSenhaErro.style.display = 'block';
-      backupSenhaInput.value = '';
-      backupSenhaInput.focus();
-    });
-  }
-
-  backupSenhaInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') validarSenhaBackup();
-  });
-  backupSenhaBtn.addEventListener('click', validarSenhaBackup);
 
   var backupCurrentInfo = $('#backupConfigCurrentInfo');
   var backupExportBtn = $('#backupConfigExportBtn');

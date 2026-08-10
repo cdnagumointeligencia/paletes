@@ -338,6 +338,11 @@
     cancelConfirmBtn: $('#cancelConfirmBtn'),
     confirmDeleteBtn: $('#confirmDeleteBtn'),
 
+    confirmStatusModal: $('#confirmStatusModal'),
+    closeConfirmStatusModal: $('#closeConfirmStatusModal'),
+    cancelConfirmStatusBtn: $('#cancelConfirmStatusBtn'),
+    confirmStatusBtn: $('#confirmStatusBtn'),
+
     toastContainer: $('#toastContainer'),
     themeToggle: $('#themeToggle'),
     historyList: $('#historyList'),
@@ -786,9 +791,8 @@
       const editingPast = editing ? isPastSlot(editing.date, editing.time) : false;
 
       if (willConfirm) {
-        if (!confirm('Ao confirmar o agendamento, a edição será bloqueada. Esta ação não pode ser desfeita. Deseja continuar?')) {
-          return;
-        }
+        const ok = await askConfirmStatus();
+        if (!ok) return;
       }
 
       const pallets = fieldsLocked ? editing.pallets : Number(els.pallets.value);
@@ -955,6 +959,26 @@
     }
   });
 
+  // ---------- Irreversible confirm (confirmar status) ----------
+  let resolveConfirmStatus = null;
+  function askConfirmStatus() {
+    return new Promise((resolve) => {
+      resolveConfirmStatus = resolve;
+      els.confirmStatusModal.classList.add('open');
+    });
+  }
+  function closeConfirmStatusModal(result) {
+    els.confirmStatusModal.classList.remove('open');
+    if (resolveConfirmStatus) {
+      const r = resolveConfirmStatus;
+      resolveConfirmStatus = null;
+      r(result);
+    }
+  }
+  els.closeConfirmStatusModal.addEventListener('click', () => closeConfirmStatusModal(false));
+  els.cancelConfirmStatusBtn.addEventListener('click', () => closeConfirmStatusModal(false));
+  els.confirmStatusBtn.addEventListener('click', () => closeConfirmStatusModal(true));
+
   // ---------- Escape helper ----------
   function escapeHtml(str) {
     return String(str ?? '').replace(/[&<>"']/g, (c) => ({
@@ -963,13 +987,18 @@
   }
 
   // Close modals on overlay click / Escape
-  [els.scheduleModal, els.confirmModal, els.logoutBackupModal].forEach((overlay) => {
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
+  [els.scheduleModal, els.confirmModal, els.confirmStatusModal, els.logoutBackupModal].forEach((overlay) => {
+    overlay.addEventListener('click', (e) => {
+      if (e.target !== overlay) return;
+      if (overlay === els.confirmStatusModal) closeConfirmStatusModal(false);
+      else overlay.classList.remove('open');
+    });
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       els.scheduleModal.classList.remove('open');
       els.confirmModal.classList.remove('open');
+      closeConfirmStatusModal(false);
       els.logoutBackupModal.classList.remove('open');
     }
   });

@@ -388,6 +388,29 @@
     </div>
   </div>
 
+  <!-- Irreversible Confirmation Modal -->
+  <div class="modal-overlay" id="confirmStatusModal">
+    <div class="modal modal-small">
+      <div class="modal-header">
+        <h3>Confirmar Agendamento</h3>
+        <button class="modal-close" id="closeConfirmStatusModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="warning-banner">
+          <i class="fas fa-triangle-exclamation"></i>
+          <div>
+            <strong>Ação irreversível</strong>
+            <p>Ao confirmar o agendamento, a edição será bloqueada. Esta ação não pode ser desfeita. Deseja continuar?</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="cancelConfirmStatusBtn">Cancelar</button>
+        <button class="btn btn-primary" id="confirmStatusBtn"><i class="fas fa-check"></i> Sim, confirmar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
