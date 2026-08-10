@@ -684,7 +684,6 @@
         setFieldsLocked(true);
         els.scheduleDate.disabled = true;
         els.scheduleTime.disabled = true;
-        els.saveBtn.style.display = 'none';
         els.deleteBtn.style.display = 'none';
       } else if (isPastSlot(s.date, s.time)) {
         // Data/horário já passou: apenas o status (Confirmado/Cancelado) pode mudar.
@@ -708,8 +707,11 @@
 
   function setFieldsLocked(locked, opts) {
     const keepStatus = opts && opts.keepStatus;
-    const fields = [els.pallets, els.scheduleTipoPalete, els.supplierInput, els.driver, els.plate, els.notes];
-    if (!keepStatus) fields.push(els.status);
+    const fields = [els.pallets, els.scheduleTipoPalete, els.supplierInput, els.driver, els.plate, els.status];
+    if (keepStatus) {
+      const i = fields.indexOf(els.status);
+      if (i >= 0) fields.splice(i, 1);
+    }
     fields.forEach((f) => { if (f) f.disabled = locked; });
     const formGroups = document.querySelectorAll('#scheduleForm .form-group label');
     const LOCK_HTML = ' <span class="locked-badge"><i class="fas fa-lock"></i></span>';

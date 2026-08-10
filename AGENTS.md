@@ -2,12 +2,12 @@
 
 ## Regra de manutenção obrigatória
 
-Toda vez que houver **qualquer alteração na página** (regra de negócio, novo comportamento, correção de bug, layout, novos campos, refatoração, etc.), você **DEVE**:
+Toda vez que houver **qualquer alteração na página** (regra de negócio, novo comportamento, correção de bug, layout, novos campos, refatoração, etc.):
 
-1. **Atualizar o documento `REGRAS-DO-NEGOCIO.md`** — mantê-lo fiel ao comportamento atual do sistema e registrar a mudança na seção "Histórico de Alterações" (com data e, se aplicável, hash do commit).
-2. **Criar ou atualizar uma conversa na pasta `conversas/`** — um arquivo `.md` com a data e um resumo do que foi feito e por quê, para rastreabilidade.
+1. **Sempre atualize o documento `REGRAS-DO-NEGOCIO.md`** — mantê-lo fiel ao comportamento atual do sistema e registrar a mudança na seção "Histórico de Alterações" (com data e, se aplicável, hash do commit). Este passo é obrigatório e incondicional.
+2. **Só crie ou atualize arquivos na pasta `conversas/` se o usuário solicitar explicitamente** — não criar por conta própria.
 
-Não feche a tarefa sem executar esses dois passos.
+Não feche a tarefa sem executar o passo 1.
 
 ## Contexto do projeto
 
