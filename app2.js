@@ -579,7 +579,8 @@
         return `
           <div class="day-slot-row">
             <button type="button" class="slot-empty slot-cancelled" data-time="${time}">
-              <i class="fas fa-rotate-left"></i> Cancelado — reagendar
+              <span class="slot-cancelled-main"><i class="fas fa-rotate-left"></i> Cancelado — reagendar</span>
+              <span class="slot-cancelled-supplier">${escapeHtml(cancelledEntry.supplier)}</span>
             </button>
           </div>`;
       }
@@ -1155,11 +1156,12 @@
     els.historyList.innerHTML = items.slice(0, 200).map((h) => {
       const iconMap = { agendamento: 'fa-calendar-check', fornecedor: 'fa-truck', usuario: 'fa-users' };
       const actionLabel = { criacao: 'Criação', edicao: 'Edição', exclusao: 'Exclusão' };
+      const isCancel = h.type === 'agendamento' && String(h.details || '').split('—').pop().trim() === 'Cancelado';
       const date = new Date(h.timestamp);
       const dateStr = formatDateBR(fmtDate(date)) + ' ' + date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       return `
         <div class="history-item">
-          <div class="history-item-icon ${h.type}"><i class="fas ${iconMap[h.type] || 'fa-circle'}"></i></div>
+          <div class="history-item-icon ${h.type}${isCancel ? ' cancelado' : ''}"><i class="fas ${isCancel ? 'fa-ban' : (iconMap[h.type] || 'fa-circle')}"></i></div>
           <div class="history-item-content">
             <div class="history-item-title">${escapeHtml(h.title)}</div>
             <div class="history-item-details">${escapeHtml(h.details)}</div>

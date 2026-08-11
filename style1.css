@@ -561,6 +561,20 @@ body, .sidebar, .header, .stats-bar .stat-card, .view-container,
   border-color: var(--status-cancelado);
   color: var(--status-cancelado);
   opacity: 0.7;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.35;
+}
+.slot-cancelled-main { display: inline-flex; align-items: center; gap: 8px; }
+.slot-cancelled-supplier {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--status-cancelado);
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 .slot-cancelled:hover {
   border-color: var(--status-cancelado);
@@ -854,6 +868,7 @@ body, .sidebar, .header, .stats-bar .stat-card, .view-container,
 .history-item-icon.estoque { background: var(--status-livre-soft); color: var(--status-livre); }
 .history-item-icon.fornecedor { background: var(--amber-soft); color: var(--amber); }
 .history-item-icon.usuario { background: var(--status-confirmado-soft); color: var(--status-confirmado); }
+.history-item-icon.cancelado { background: var(--status-cancelado-soft); color: var(--status-cancelado); }
 
 .history-item-content { flex: 1; min-width: 0; }
 
