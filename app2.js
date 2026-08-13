@@ -779,12 +779,6 @@
         els.scheduleDate.disabled = true;
         els.scheduleTime.disabled = true;
         els.deleteBtn.style.display = 'none';
-      } else if (isPastSlot(s.date, s.time)) {
-        // Data/horário já passou: apenas o status (Confirmado/Cancelado) pode mudar.
-        setFieldsLocked(true, { keepStatus: true });
-        els.scheduleDate.disabled = true;
-        els.scheduleTime.disabled = true;
-        els.deleteBtn.style.display = 'none';
       }
     } else {
       els.modalTitle.textContent = 'Novo Agendamento';
@@ -826,8 +820,6 @@
     const editing = state.editingScheduleId ? state.schedules.find((sc) => sc.id === state.editingScheduleId) : null;
     if (editing && editing.status === 'Confirmado') {
       setFieldsLocked(true);
-    } else if (editing && isPastSlot(editing.date, editing.time)) {
-      setFieldsLocked(true, { keepStatus: true });
     } else {
       setFieldsLocked(false);
     }
@@ -892,7 +884,7 @@
       }
 
       const pallets = fieldsLocked ? editing.pallets : Number(els.pallets.value);
-      if (!fieldsLocked && !editingPast && pallets > 1000) {
+      if (!fieldsLocked && pallets > 1000) {
         toast('Máximo de 1000 paletes por slot.', 'error');
         return;
       }
@@ -912,8 +904,8 @@
       };
 
       // REGRA: não permitir agendar para data/horário que já passou.
-      // Criação em slot passado é bloqueada; edição de agendamento passado
-      // só permite confirmar ou cancelar (campos já travados no modal).
+      // Criação em slot passado é bloqueada; mover um agendamento futuro
+      // para o passado também é bloqueado.
       const slotInPast = isPastSlot(payload.date, payload.time);
       if (!editing && slotInPast) {
         toast('Não é possível agendar para uma data/horário que já passou.', 'error');
@@ -921,10 +913,6 @@
       }
       if (editing && !editingPast && slotInPast) {
         toast('Não é possível mover o agendamento para uma data/horário que já passou.', 'error');
-        return;
-      }
-      if (editing && editingPast && payload.status === 'Agendado') {
-        toast('Agendamento passado: só é possível confirmar ou cancelar.', 'error');
         return;
       }
 
