@@ -510,7 +510,12 @@
   // ---------- List view ----------
   function renderList() {
     const statusFilterValue = els.statusFilter.value;
-    let rows = [...state.schedules].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    let rows = [...state.schedules].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+
+    if (!state.searchQuery) {
+      const monthKey = fmtDate(new Date()).slice(0, 7);
+      rows = rows.filter((s) => s.date.startsWith(monthKey));
+    }
 
     if (statusFilterValue !== 'all') rows = rows.filter((s) => s.status === statusFilterValue);
     if (state.searchQuery) {
@@ -1014,6 +1019,11 @@
 
   function renderHistory() {
     let items = [...state.history];
+
+    if (!state.historySearchQuery) {
+      const monthKey = fmtDate(new Date()).slice(0, 7);
+      items = items.filter((h) => fmtDate(new Date(h.timestamp)).slice(0, 7) === monthKey);
+    }
 
     if (state.historyTypeFilter !== 'all') items = items.filter((h) => h.type === state.historyTypeFilter);
     if (state.historyActionFilter !== 'all') items = items.filter((h) => h.action === state.historyActionFilter);
