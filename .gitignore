@@ -11,3 +11,4 @@ __pycache__/
 # Documentacao local de regras e conversas (manutencao obrigatoria, nao versionada)
 conversas/
 REGRAS-DO-NEGOCIO.md
+AGENTS.md

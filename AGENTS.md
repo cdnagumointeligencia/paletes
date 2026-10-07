@@ -1,13 +1,9 @@
 # AGENTS.md
 
-## Regra de manutenção obrigatória
+## Regras de manutenção
 
-Toda vez que houver **qualquer alteração na página** (regra de negócio, novo comportamento, correção de bug, layout, novos campos, refatoração, etc.):
-
-1. **Sempre atualize o documento `REGRAS-DO-NEGOCIO.md`** — mantê-lo fiel ao comportamento atual do sistema e registrar a mudança na seção "Histórico de Alterações" (com data e, se aplicável, hash do commit). Este passo é obrigatório e incondicional.
-2. **Só crie ou atualize arquivos na pasta `conversas/` se o usuário solicitar explicitamente** — não criar por conta própria.
-
-Não feche a tarefa sem executar o passo 1.
+- **Só atualize o documento `REGRAS-DO-NEGOCIO.md` se o usuário solicitar explicitamente** — não atualizar por conta própria.
+- **Só crie ou atualize arquivos na pasta `conversas/` se o usuário solicitar explicitamente** — não criar por conta própria.
 
 ## Contexto do projeto
 
