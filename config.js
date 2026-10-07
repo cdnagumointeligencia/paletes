@@ -63,10 +63,13 @@
   }
 
   // ---------- Histórico ----------
+  // Usuário autenticado no modal de acesso às configurações (para o histórico).
+  var authUserName = 'Admin';
+
   function addHistoryEvent(type, action, title, details) {
     // Grava no Firestore (um evento por CD) para os listeners das app pages.
     if (window.FB && window.FB.addHistoryEvent) {
-      var evt = { type: type, action: action, title: title, details: details, user: 'Admin' };
+      var evt = { type: type, action: action, title: title, details: details, user: authUserName };
       ['cd1', 'cd2'].forEach(function (cd) {
         window.FB.addHistoryEvent({ cd: cd, ...evt }).catch(function (err) {
           console.error('addHistoryEvent (Firestore) failed:', err);
@@ -129,11 +132,18 @@
     if (!adminModal) {
       // fallback: abrir diretamente
       resetModalConfig();
+      setRestrictedMode(false);
       modalConfig.classList.add('open');
       renderSuppliersList();
       refreshSuppliers();
       setTimeout(function () { var el = document.getElementById('userConfigSenhaInput'); if (el) el.focus(); }, 120);
       return;
+    }
+    // Pré-preenche o usuário com o valor digitado no formulário de login
+    var authUserInput = document.getElementById('adminAuthUser');
+    var loginInput = document.getElementById('username');
+    if (authUserInput && loginInput && loginInput.value.trim()) {
+      authUserInput.value = loginInput.value.trim();
     }
     // abrir modal de autenticação e focar o campo
     adminModal.classList.add('open');
@@ -147,30 +157,67 @@
   (function() {
     var adminModal = document.getElementById('modalAdminAuth');
     if (!adminModal) return;
+    var userInput = document.getElementById('adminAuthUser');
     var pwdInput = document.getElementById('adminAuthPassword');
     var submitBtn = document.getElementById('adminAuthSubmit');
     var cancelBtn = document.getElementById('adminAuthCancel');
     var closeBtn = document.getElementById('adminAuthClose');
     var errEl = document.getElementById('adminAuthError');
 
-    function openConfigAfterAuth() {
+    function openConfigAfterAuth(user) {
+      var isAdmin = user && user.role === 'Admin';
+      authUserName = (user && user.username) ? user.username : 'Admin';
       adminModal.classList.remove('open');
       resetModalConfig();
+      setRestrictedMode(!isAdmin);
       modalConfig.classList.add('open');
-      refreshUsers();
+      if (isAdmin) refreshUsers();
       renderSuppliersList();
       refreshSuppliers();
-      setTimeout(function () { var el = document.getElementById('userConfigSenhaInput'); if (el) el.focus(); }, 120);
+      // Garante que a aba Fornecedores fique ativa ao abrir
+      var suppliersTab = document.querySelector('.config-tab[data-tab="configPaneFornecedores"]');
+      if (suppliersTab) suppliersTab.click();
+      setTimeout(function () {
+        var el = isAdmin ? document.getElementById('userConfigSenhaInput') : document.getElementById('addSupplierConfigBtn');
+        if (el) el.focus();
+      }, 120);
     }
 
     function validarAdminModal() {
       var pwd = pwdInput ? pwdInput.value : '';
-      if (!pwd) return;
-      window.FB.validateUser('admin', pwd).then(function (admin) {
-        if (admin && admin.role === 'Admin') {
+      if (!pwd) {
+        if (errEl) errEl.style.display = 'block';
+        return;
+      }
+      // Página sem campo de usuário (versão antiga): valida apenas a senha do admin
+      if (!userInput) {
+        window.FB.validateUser('admin', pwd).then(function (user) {
+          if (user && user.role === 'Admin') {
+            if (errEl) errEl.style.display = 'none';
+            pwdInput.value = '';
+            openConfigAfterAuth(user);
+          } else {
+            if (errEl) errEl.style.display = 'block';
+            pwdInput.value = '';
+            pwdInput.focus();
+          }
+        }).catch(function () {
+          if (errEl) errEl.style.display = 'block';
+          pwdInput.value = '';
+          pwdInput.focus();
+        });
+        return;
+      }
+      var username = userInput.value.trim().toLowerCase();
+      if (!username) {
+        if (errEl) errEl.style.display = 'block';
+        return;
+      }
+      window.FB.validateUser(username, pwd).then(function (user) {
+        if (user) {
           if (errEl) errEl.style.display = 'none';
           pwdInput.value = '';
-          openConfigAfterAuth();
+          openConfigAfterAuth(user);
         } else {
           if (errEl) errEl.style.display = 'block';
           pwdInput.value = '';
@@ -187,6 +234,7 @@
     cancelBtn.addEventListener('click', function () { adminModal.classList.remove('open'); });
     closeBtn.addEventListener('click', function () { adminModal.classList.remove('open'); });
     pwdInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') validarAdminModal(); });
+    if (userInput) userInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') validarAdminModal(); });
   })();
 
   // ---------- Abas ----------
@@ -194,6 +242,7 @@
   var configPanes = document.querySelectorAll('.config-pane');
   Array.prototype.forEach.call(configTabs, function (tab) {
     tab.addEventListener('click', function () {
+      if (restrictedMode && tab.dataset.tab !== 'configPaneFornecedores') return;
       Array.prototype.forEach.call(configTabs, function (t) { t.classList.toggle('active', t === tab); });
       Array.prototype.forEach.call(configPanes, function (p) { p.classList.toggle('active', p.id === tab.dataset.tab); });
       if (tab.dataset.tab === 'configPaneFornecedores') { renderSuppliersList(); refreshSuppliers(); }
@@ -201,6 +250,17 @@
       if (tab.dataset.tab === 'configPaneBackup' && backupGestaoArea.style.display === 'block') renderBackupCurrentInfo();
     });
   });
+
+  // Modo restrito: usuário comum (não-Admin) acessa apenas o cadastro de fornecedores.
+  var restrictedMode = false;
+
+  function setRestrictedMode(restricted) {
+    restrictedMode = restricted;
+    Array.prototype.forEach.call(configTabs, function (t) {
+      var isSuppliers = t.dataset.tab === 'configPaneFornecedores';
+      t.style.display = restricted && !isSuppliers ? 'none' : '';
+    });
+  }
 
   // ==========================================================================
   // Fornecedores
@@ -307,6 +367,7 @@
             ${s.phone ? '<span><i class="fas fa-phone"></i>' + escapeHtml(s.phone) + '</span>' : ''}
             ${s.email ? '<span><i class="fas fa-envelope"></i>' + escapeHtml(s.email) + '</span>' : ''}
           </div>
+          ${restrictedMode ? '' : `
           <div class="supplier-card-actions">
             <button type="button" class="btn btn-secondary" data-action="edit-supplier" data-id="${escapeHtml(s.id)}" style="flex:1;justify-content:center;">
               <i class="fas fa-pen"></i> Editar
@@ -314,7 +375,7 @@
             <button type="button" class="btn btn-danger" data-action="delete-supplier" data-id="${escapeHtml(s.id)}">
               <i class="fas fa-trash"></i>
             </button>
-          </div>
+          </div>`}
         </div>
       `;
     }).join('');

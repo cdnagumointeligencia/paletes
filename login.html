@@ -77,11 +77,15 @@
         <button class="modal-close" id="adminAuthClose" aria-label="Fechar">&times;</button>
       </div>
       <div class="modal-body">
-        <p>Digite a senha do administrador para acessar as configurações.</p>
+        <p>Informe seu usuário e senha para acessar as configurações.</p>
         <div class="form-group">
-          <label for="adminAuthPassword">Senha do Administrador</label>
-          <input type="password" id="adminAuthPassword" placeholder="Senha do administrador" autocomplete="off">
-          <div class="senha-erro" id="adminAuthError" style="display:none;margin-top:10px;">Senha incorreta.</div>
+          <label for="adminAuthUser">Usuário</label>
+          <input type="text" id="adminAuthUser" placeholder="Digite seu usuário" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="adminAuthPassword">Senha</label>
+          <input type="password" id="adminAuthPassword" placeholder="Digite sua senha" autocomplete="off">
+          <div class="senha-erro" id="adminAuthError" style="display:none;margin-top:10px;">Usuário ou senha inválidos.</div>
         </div>
       </div>
       <div class="modal-actions">
